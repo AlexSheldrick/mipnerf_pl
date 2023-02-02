@@ -18,7 +18,7 @@ from scipy.ndimage import gaussian_filter
 
 Rays = collections.namedtuple(
     'Rays',
-    ('origins', 'directions', 'viewdirs', 'radii', 'lossmult', 'near', 'far', 'depth', 'normal', 'mask', 'depth_vars'))
+    ('origins', 'directions', 'viewdirs', 'radii', 'lossmult', 'near', 'far', 'depth', 'normal', 'mask', 'depth_vars', 'cam_idx'))
 Rays_keys = Rays._fields
 
 
@@ -527,8 +527,9 @@ class ScanNet(BaseDataset):
         zs = np.sqrt(xs**2 + ys**2 + 1) 
         depth_var = zs/100
 
-        depth_var[d_mask] = np.where(0.5*od_mean_std > depth_var[d_mask], 0.5*od_mean_std , depth_var[d_mask])
+        #depth_var[d_mask] = np.where(0.5*od_mean_std > depth_var[d_mask], 0.5*od_mean_std , depth_var[d_mask])
         #depth_var[d_mask] = od_mean_std
+        depth_var[d_mask] = 1.
         depth_var = depth_var[..., None].astype(np.float32)
         depth = depth[..., None].astype(np.float32)
         return depth, depth_var
@@ -627,6 +628,7 @@ class ScanNet(BaseDataset):
         lossmults = broadcast_scalar_attribute(1).copy()
         nears = broadcast_scalar_attribute(self.near).copy()
         fars = broadcast_scalar_attribute(self.far).copy()
+        cam_idx = [x * np.ones_like(origins[x][..., :1]) for x in range(len(self.images))]
 
         # Distance from each unit-norm direction vector to its x-axis neighbor.
         dx = [
@@ -659,7 +661,8 @@ class ScanNet(BaseDataset):
             depth=depth,
             normal=normal,
             depth_vars=depth_vars,
-            mask = mask)
+            mask = mask,
+            cam_idx = cam_idx)
 
     def _load_renderings(self, num_images):
         """Load images from disk."""
@@ -750,6 +753,7 @@ class ScanNet(BaseDataset):
         lossmults = broadcast_scalar_attribute(1).copy()
         nears = broadcast_scalar_attribute(self.near).copy()
         fars = broadcast_scalar_attribute(self.far).copy()
+        cam_idx = [x * np.ones_like(origins[x][..., :1]) for x in range(len(self.images))]
 
         # Distance from each unit-norm direction vector to its x-axis neighbor.
         dx = [
@@ -784,7 +788,8 @@ class ScanNet(BaseDataset):
             depth=depth,
             normal=normal,
             depth_vars=depth_vars,
-            mask = mask)
+            mask = mask,
+            cam_idx = cam_idx)
         #del origins, directions, viewdirs, radii, lossmults, nears, fars, camera_dirs
 
 

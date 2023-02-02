@@ -80,7 +80,7 @@ def save_images(rgb, dist, acc, path, idx):
     save_image_tensor(acc, H, W, os.path.join(path, str('{:05d}'.format(idx)) + '_normals' + '.png'))
 
 
-def visualize_depth(depth, cmap=cv2.COLORMAP_TURBO): #cmap=cv2.COLORMAP_JET
+def visualize_depth(depth, cmap=cv2.COLORMAP_TURBO, masked=False): #cmap=cv2.COLORMAP_JET
     """
     depth: (H, W)
     """
@@ -88,12 +88,26 @@ def visualize_depth(depth, cmap=cv2.COLORMAP_TURBO): #cmap=cv2.COLORMAP_JET
     if len(x.shape) > 2:
         x = np.squeeze(x)
     x = np.nan_to_num(x)  # change nan to 0
-    mi = np.min(x)  # get minimum depth
-    ma = np.max(x)
-    x = (x - mi) / max(ma - mi, 1e-8)  # normalize to 0~1
+
+    if masked:
+        mask = (x == 0.)
+        mi = np.min(x[x > 0])   # get minimum depth, mask out zero depth values
+        ma = np.max(x)
+        x = (x - mi) / max(ma - mi, 1e-8)  # normalize to 0~1
+        x[mask] = 0.
+        
+    else:
+        mi = np.min(x)  # get minimum depth
+        ma = np.max(x)
+        x = (x - mi) / max(ma - mi, 1e-8)  # normalize to 0~1
+
     x = (255 * x).astype(np.uint8)
+
     x_ = Image.fromarray(cv2.applyColorMap(x, cmap))
     x_ = T.ToTensor()(x_)  # (3, H, W)
+    if masked: 
+        mask = torch.from_numpy(np.broadcast_to(mask, (3,*mask.shape)))
+        x_[mask] = 0.
     return x_
 
 def visualize_normal(x):

@@ -80,7 +80,7 @@ class MLP(torch.nn.Module):
         if not prop_mlp:
             self.color_layer = torch.nn.Linear(net_width_condition, num_rgb_channels)
 
-    def forward(self, x, view_direction=None):
+    def forward(self, x, view_direction=None, glo_vec=None):
         """Evaluate the MLP.
 
         Args:
@@ -117,6 +117,12 @@ class MLP(torch.nn.Module):
             # view_direction: [B, 2*3*L] -> [B, N, 2*3*L]
             view_direction = repeat(view_direction, 'batch feature -> batch sample feature', sample=num_samples)
             x = torch.cat([bottleneck, view_direction], dim=-1)
+
+            if glo_vec is not None:
+                glo_vec = torch.broadcast_to(glo_vec[..., None, :],
+                                            bottleneck.shape[:-1] + glo_vec.shape[-1:])
+                #x.append(glo_vec)
+            x = torch.cat([x, glo_vec], dim=-1)
             # Here use 1 extra layer to align with the original nerf model.
             x = self.view_layers(x)
 
@@ -161,7 +167,9 @@ class MipNerf(torch.nn.Module):
                  mlp_num_rgb_channels: int = 3,
                  mlp_num_density_channels: int = 1,
                  mlp_net_activation: str = 'relu',
-                 prop_mlp: bool = False):
+                 prop_mlp: bool = False,
+                 num_glo_embeddings = 18,
+                 num_glo_features = 4):
         super(MipNerf, self).__init__()
         self.num_levels = num_levels  # The number of sampling levels.
         self.num_samples = num_samples  # The number of samples per level.
@@ -178,7 +186,7 @@ class MipNerf(torch.nn.Module):
         self.resample_padding = resample_padding  # Dirichlet/alpha "padding" on the histogram.
         self.stop_resample_grad = stop_resample_grad  # If True, don't backprop across levels')
         mlp_xyz_dim = (max_deg_point - min_deg_point) * 3 * 2
-        mlp_view_dim = deg_view * 3 * 2
+        mlp_view_dim = deg_view * 3 * 2 + 4
         mlp_view_dim = mlp_view_dim + 3 if append_identity else mlp_view_dim
         self.mlp = MLP(mlp_net_depth, mlp_net_width, mlp_net_depth_condition, mlp_net_width_condition,
                        mlp_skip_index, mlp_num_rgb_channels, mlp_num_density_channels, mlp_net_activation,
@@ -209,10 +217,12 @@ class MipNerf(torch.nn.Module):
           nn.Tanh(),
         )
         self.dir_enc_fun = generate_ide_fn(4)"""
+        self.num_glo_embeddings = num_glo_embeddings
+        self.num_glo_features = num_glo_features
         
         #self.pos_basis_t = torch.from_numpy(generate_basis('icosahedron', 2)).to(torch.float16).to(device='cuda:0') # self.basis_shape : 'icosahedron'  // self.basis_subdivisions : 2
 
-    def forward(self, rays: namedtuple, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0):
+    def forward(self, rays: namedtuple, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0, zero_glo = True):
         """The mip-NeRF Model.
         Args:
             rays: util.Rays, a namedtuple of ray origins, directions, and viewdirs.
@@ -221,6 +231,28 @@ class MipNerf(torch.nn.Module):
         Returns:
             ret: list, [*(rgb, distance, acc)]
         """
+        if self.num_glo_features > 0:
+            if not zero_glo:
+                # Construct/grab GLO vectors for the cameras of each input ray.
+                glo_vecs = torch.nn.Embedding(self.num_glo_embeddings, self.num_glo_features, device=rays[0].device)
+                cam_idx = rays.cam_idx[..., 0]
+                glo_vec = glo_vecs(cam_idx)
+            else:
+                glo_vec = torch.zeros(rays.origins.shape[:-1] + (self.num_glo_features,), device=rays[0].device)
+        else:
+            glo_vec = None
+
+        """if self.learned_exposure_scaling:
+            # Setup learned scaling factors for output colors.
+            max_num_exposures = self.num_glo_embeddings
+            # Initialize the learned scaling offsets at 0.
+            init_fn = torch.nn.init.zeros_
+            exposure_scaling_offsets = nn.Embed(
+                max_num_exposures,
+                features=3,
+                embedding_init=init_fn,
+                name='exposure_scaling_offsets')"""
+
         batch_size = rays[0].shape[0]
         w_env = torch.empty((self.num_levels - 1, batch_size, self.num_samples), device=rays[0].device)
         t_env = torch.empty((self.num_levels - 1, batch_size, self.num_samples + 1), device=rays[0].device)
@@ -318,14 +350,14 @@ class MipNerf(torch.nn.Module):
                     )
                     
                     if not self.prop_mlp or (i_level == (self.num_levels - 1)):
-                        raw_rgb, raw_density = self.mlp(samples_enc, viewdirs_enc)
+                        raw_rgb, raw_density = self.mlp(samples_enc, viewdirs_enc, glo_vec)
                     else:
-                        raw_density = self.prop_mlp(samples_enc, viewdirs_enc)
+                        raw_density = self.prop_mlp(samples_enc, viewdirs_enc, glo_vec)
                 else:
-                    raw_rgb, raw_density = self.mlp(samples_enc)
+                    raw_rgb, raw_density = self.mlp(samples_enc, glo_vec)
             
             elif compute_normals and (i_level == (self.num_levels - 1)):
-                raw_rgb, raw_density, normals = self.gradient(means_covs, rays.viewdirs)
+                raw_rgb, raw_density, normals = self.gradient(means_covs, rays.viewdirs, glo_vec)
 
             # Add noise to regularize the density predictions if needed.
             if randomized and (self.density_noise > 0):
@@ -393,7 +425,7 @@ class MipNerf(torch.nn.Module):
                             }
         return out
 
-    def gradient(self, means_covs, viewdirs):
+    def gradient(self, means_covs, viewdirs, glo_vec):
         means_covs[0].requires_grad_()
         means_covs[1].requires_grad_()
         GraphBools = self.training           
@@ -409,7 +441,7 @@ class MipNerf(torch.nn.Module):
                     self.min_deg_point,
                     self.max_deg_point,
                 )  
-            raw_rgb, raw_density = self.mlp(samples_enc, view_direction_encoded)
+            raw_rgb, raw_density = self.mlp(samples_enc, view_direction_encoded, glo_vec)
             d_output = torch.ones_like(raw_density, requires_grad=GraphBools, device=raw_density.device)
             normals = torch.autograd.grad(
                 outputs=raw_density,
@@ -602,9 +634,9 @@ def lossfun_depth_weight_CDF(rays: namedtuple, tvals_, w, eps, uncertain = False
     
     #beta = 0.01 * torch.ones_like(rays.depth_vars)
     #beta[rays.depth_vars > 0.01] = rays.depth_vars[rays.depth_vars > 0.01]
-    #beta = rays.depth_vars
+    beta = rays.depth_vars
     #beta = 0.02
-    beta = 0.
+    #beta = 0.
 
     mask_near_close = (((tvals) > (depth  - 3*sigma - beta)) & (tvals  < (depth - beta)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
     mask_near_far = ((tvals  > (depth + beta)) & ((tvals) < (depth  + 3*sigma + beta)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)

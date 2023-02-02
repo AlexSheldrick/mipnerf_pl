@@ -17,7 +17,7 @@ from utils.vis import stack_rgb, visualize_depth, visualize_normal, l2_normalize
 
 Rays = collections.namedtuple(
     'Rays',
-    ('origins', 'directions', 'viewdirs', 'radii', 'lossmult', 'near', 'far', 'depth', 'normal', 'mask', 'depth_vars'))
+    ('origins', 'directions', 'viewdirs', 'radii', 'lossmult', 'near', 'far', 'depth', 'normal', 'mask', 'depth_vars', 'cam_idx'))
 
 
 class MipNeRFSystem(LightningModule):
@@ -64,10 +64,12 @@ class MipNeRFSystem(LightningModule):
             mlp_num_rgb_channels=hparams['nerf.mlp.num_rgb_channels'],
             mlp_num_density_channels=hparams['nerf.mlp.num_density_channels'],
             mlp_net_activation=hparams['nerf.mlp.net_activation'],
-            prop_mlp=hparams['nerf.mlp.prop_mlp']   
+            prop_mlp=hparams['nerf.mlp.prop_mlp'],
+            num_glo_embeddings = hparams['nerf.mlp.num_glo_embeddings'],
+            num_glo_features = hparams['nerf.mlp.num_glo_features'],
         )
 
-    def forward(self, batch_rays: torch.Tensor, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0):
+    def forward(self, batch_rays: torch.Tensor, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0, zero_glo = True):
         # TODO make a multi chunk
         """
         B = batch_rays.directions.shape[0]
@@ -147,7 +149,7 @@ class MipNeRFSystem(LightningModule):
                           persistent_workers=True)"""
                           
     def training_step(self, batch, batch_nb):
-        eps = max(0.25 - 0.5*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.09)
+        eps = max(0.33 - 0.5*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.03)
         #if self.global_step < 8000:
         #eps = max(0.2 - 0.2*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.04)
         #else:
@@ -155,7 +157,7 @@ class MipNeRFSystem(LightningModule):
         #0.17
         #eps = 0.08 #, 0.12
         rays, rgbs = batch
-        ret = self(rays, self.train_randomized, self.white_bkgd, self.compute_density_normals, eps)
+        ret = self(rays, self.train_randomized, self.white_bkgd, self.compute_density_normals, eps, zero_glo = False)
         targets = {'rgb': rgbs[..., :3], 'depth': rays.depth.view(-1), 'normal': rays.normal, 'dirs': rays.viewdirs, 'var':rays.depth_vars} #, 'mask': rays.mask.view(-1)
         loss_dict = self.loss(ret, targets, step = self.global_step)
         self.logging(loss_dict, mode='train') 
@@ -291,7 +293,7 @@ class MipNeRFSystem(LightningModule):
         #depth
         depth_pred = results['depth']
         depth_pred = visualize_depth(depth_pred.view(1, H, W)) # H W
-        depth_gt = visualize_depth(rays.depth.view(H,W))
+        depth_gt = visualize_depth(rays.depth.view(H,W), masked=True)
 
         #normals
         #depth_mask = (rays.depth < 0.1).view(-1) # (H*W)
