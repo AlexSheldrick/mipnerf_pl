@@ -123,8 +123,11 @@ def main(hparams):
         gradient_clip_val=1e-3,
     )
 
-    trainer.fit(system, ckpt_path=hparams['checkpoint.resume_path'])
+    #trainer.fit(system, ckpt_path=hparams['checkpoint.resume_path'])
     #   profiler.export_chrome_trace("trace.json")
+    model = system.load_from_checkpoint("/home/sheldrick/master/mipnerf_pl/OUT/scannet/ckpt/scannet-710_GLO/epoch-38_step-25000_psnr-val_psnr22.4093.ckpt")
+    model.eval()
+    trainer.test(model)
 
 
 if __name__ == "__main__":

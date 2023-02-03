@@ -69,6 +69,7 @@ class MipNeRFSystem(LightningModule):
             num_glo_features = hparams['nerf.mlp.num_glo_features'],
         )
 
+
     def forward(self, batch_rays: torch.Tensor, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0, zero_glo = True):
         # TODO make a multi chunk
         """
@@ -105,11 +106,11 @@ class MipNeRFSystem(LightningModule):
                                    white_bkgd=self.hparams['val.white_bkgd'],
                                    batch_type=self.hparams['val.batch_type']
                                    )
-        """self.test_dataset = dataset(data_dir=self.hparams['data_path'],
-                                   split='cam',
+        self.test_dataset = dataset(data_dir=self.hparams['data_path'],
+                                   split='test',
                                    white_bkgd=self.hparams['val.white_bkgd'],
                                    batch_type=self.hparams['val.batch_type']
-                                   )"""
+                                   )
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.mip_nerf.parameters(), lr=self.hparams['optimizer.lr_init'], fused= False) #self.amp)
@@ -138,7 +139,7 @@ class MipNeRFSystem(LightningModule):
                           pin_memory=True,
                           persistent_workers=True)
 
-    """def test_dataloader(self):
+    def test_dataloader(self):
         # must give 1 worker
         return DataLoader(self.test_dataset,
                           shuffle=False,
@@ -146,10 +147,10 @@ class MipNeRFSystem(LightningModule):
                           # validate one image (H*W rays) at a time
                           batch_size=1,
                           pin_memory=True,
-                          persistent_workers=True)"""
+                          persistent_workers=True)
                           
     def training_step(self, batch, batch_nb):
-        eps = max(0.33 - 0.5*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.03)
+        eps = max(0.33 - 0.5*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.1)
         #if self.global_step < 8000:
         #eps = max(0.2 - 0.2*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.04)
         #else:
@@ -158,7 +159,7 @@ class MipNeRFSystem(LightningModule):
         #eps = 0.08 #, 0.12
         rays, rgbs = batch
         ret = self(rays, self.train_randomized, self.white_bkgd, self.compute_density_normals, eps, zero_glo = False)
-        targets = {'rgb': rgbs[..., :3], 'depth': rays.depth.view(-1), 'normal': rays.normal, 'dirs': rays.viewdirs, 'var':rays.depth_vars} #, 'mask': rays.mask.view(-1)
+        targets = {'rgb': rgbs[..., :3], 'depth': rays.depth.view(-1), 'normal': rays.normal, 'dirs': rays.viewdirs, 'var':rays.depth_vars, 'dmask': rays.mask.view(-1)}
         loss_dict = self.loss(ret, targets, step = self.global_step)
         self.logging(loss_dict, mode='train') 
         self.log('s', ret['s'])        
@@ -169,27 +170,53 @@ class MipNeRFSystem(LightningModule):
             rays, rgbs = batch
             ret = self.render_image(batch, chunk_size=self.val_chunk_size)
             targets = {'rgb': rgbs[..., :3].view(-1,3), 'depth': rays.depth.view(-1), 'normal': rays.normal.view(-1,3), 'dirs': rays.viewdirs.view(-1,3), 
-                        'mask': ret['mask'], 'var':rays.depth_vars} #, 'mask': rays.mask.view(-1)
+                        'mask': ret['mask'], 'var':rays.depth_vars, 'dmask': rays.mask.view(-1)} #
             loss_dict = self.loss(ret, targets, mask=ret['mask'])
             if batch_nb == 0:
                 self.write_imgs_to_tensorboard(ret, rays, rgbs, 'val')
             return loss_dict
 
-    """def test_step(self, batch, batch_nb):
-        # flag for no-supervision
-        # generate rays for every camera
-        # render
-        with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.amp):
-            ret = self.render_image(batch, chunk_size=self.val_chunk_size)
-            #targets = {'rgb': rgbs[..., :3].view(-1,3), 'depth': rays.depth.view(-1), 'normal': rays.normal.view(-1,3), 'dirs': rays.viewdirs.view(-1,3), 
-            #'mask': ret['mask'], 'var':rays.depth_vars} #, 'mask': rays.mask.view(-1)
-            #loss_dict = self.loss(ret, targets, mask=ret['mask'])
-            #if batch_nb == 0:
-            #    self.write_imgs_to_tensorboard(ret, rays, rgbs, 'val')
-            #return loss_dict
-            self.write_imgs_to_disk(ret)"""
+    def test_step(self, batch, batch_nb):
+        with torch.inference_mode(False): 
+            with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.amp):
+                rays, rgbs = batch
+                ret = self.render_image(batch, chunk_size=self.val_chunk_size)
+                targets = {'rgb': rgbs[..., :3].view(-1,3), 'depth': rays.depth.view(-1), 'normal': rays.normal.view(-1,3), 'dirs': rays.viewdirs.view(-1,3), 
+                            'mask': ret['mask'], 'var':rays.depth_vars, 'dmask': rays.mask.view(-1)} #
+                loss_dict = self.loss(ret, targets, mask=ret['mask'])
+                self.write_imgs_to_tensorboard(ret, rays, rgbs, 'test', '_img_'+str(batch_nb))
+                return loss_dict
 
     def validation_epoch_end(self, outputs):
+        self.mean_metrics(outputs, mode='val')
+    
+    def test_epoch_end(self, outputs):
+        try:
+            mean_loss = torch.stack([x['total'] for x in outputs]).mean()
+            mean_rgb = torch.stack([x['rgb'] for x in outputs]).mean()
+            mean_depth = torch.stack([x['depth'] for x in outputs]).mean()
+            mean_psnr = torch.stack([x['psnr'] for x in outputs]).mean()
+            mean_normal = torch.stack([x['normal'] for x in outputs]).mean()
+            mean_orientation = torch.stack([x['orientation'] for x in outputs]).mean()
+            mean_distortion = torch.stack([x['distortion'] for x in outputs]).mean()
+            mean_near = torch.stack([x['near'] for x in outputs]).mean()
+            mean_empty = torch.stack([x['empty'] for x in outputs]).mean()
+            mean_envelope = torch.stack([x['envelope'] for x in outputs]).mean()
+            mean_normal_loss_lowerbounded = torch.stack([x['normal_loss_lowerbounded'] for x in outputs]).mean()
+            mean_chord_loss = torch.stack([x['chord'] for x in outputs]).mean()
+            #mean_incomplete = torch.stack([x['incomplete'] for x in outputs]).mean()
+
+            mean_losses = {'total': mean_loss, 'rgb': mean_rgb, 'depth': mean_depth, 'psnr': mean_psnr, 'normal': mean_normal,
+                            'orientation': mean_orientation, 'distortion': mean_distortion, 'near': mean_near, 'empty': mean_empty,
+                            'chord': mean_chord_loss, 'normal_loss_lowerbounded': mean_normal_loss_lowerbounded, 'envelope': mean_envelope#,
+                            #'incomplete': mean_incomplete
+                            #'expected_depth': mean_expected_depth, 'termination': mean_termination
+                            }
+            self.logging(mean_losses, mode='test')
+        except:
+            pass
+
+    def mean_metrics(self, outputs, mode='val'):
         with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.amp):
             ret, rays, rgbs = self.render_image(None, mode='train')
             self.write_imgs_to_tensorboard(ret, rays, rgbs, 'train')
@@ -214,7 +241,7 @@ class MipNeRFSystem(LightningModule):
                             #'incomplete': mean_incomplete
                             #'expected_depth': mean_expected_depth, 'termination': mean_termination
                             }
-            self.logging(mean_losses, mode='val')
+            self.logging(mean_losses, mode=mode)
         except:
             pass
 
@@ -288,11 +315,11 @@ class MipNeRFSystem(LightningModule):
         pass
         #collect all the images in given path and make a gif
 
-    def write_imgs_to_tensorboard(self, results: dict, rays: namedtuple, rgbs: torch.Tensor, mode: bool='val') -> None: 
+    def write_imgs_to_tensorboard(self, results: dict, rays: namedtuple, rgbs: torch.Tensor, mode: bool='val', batch_nb: str ='') -> None: 
         N, H, W, C = rgbs.shape  # N H W C
         #depth
         depth_pred = results['depth']
-        depth_pred = visualize_depth(depth_pred.view(1, H, W)) # H W
+        depth_pred = visualize_depth(depth_pred.view(1, H, W), masked=True) # H W
         depth_gt = visualize_depth(rays.depth.view(H,W), masked=True)
 
         #normals
@@ -321,4 +348,4 @@ class MipNeRFSystem(LightningModule):
         canvas[:, H:2*H, 0:W] = fine_rgb.squeeze(0).permute(2, 0, 1).cpu()
         canvas[:, H:2*H, W:2*W] = depth_pred
         canvas[:, H:2*H, 2*W:3*W] = normals_pred.squeeze(0).permute(2, 0, 1).cpu()
-        self.logger.experiment.add_image(f'{mode}/GT_pred', canvas, self.global_step)
+        self.logger.experiment.add_image(f'{mode}/GT_pred{batch_nb}', canvas, self.global_step)

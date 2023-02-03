@@ -219,6 +219,8 @@ class MipNerf(torch.nn.Module):
         self.dir_enc_fun = generate_ide_fn(4)"""
         self.num_glo_embeddings = num_glo_embeddings
         self.num_glo_features = num_glo_features
+        if self.num_glo_features > 0: # Construct/grab GLO vectors for the cameras of each input ray.
+            self.glo_vecs = torch.nn.Embedding(self.num_glo_embeddings, self.num_glo_features)
         
         #self.pos_basis_t = torch.from_numpy(generate_basis('icosahedron', 2)).to(torch.float16).to(device='cuda:0') # self.basis_shape : 'icosahedron'  // self.basis_subdivisions : 2
 
@@ -231,13 +233,15 @@ class MipNerf(torch.nn.Module):
         Returns:
             ret: list, [*(rgb, distance, acc)]
         """
-        if self.num_glo_features > 0:
-            if not zero_glo:
-                # Construct/grab GLO vectors for the cameras of each input ray.
-                glo_vecs = torch.nn.Embedding(self.num_glo_embeddings, self.num_glo_features, device=rays[0].device)
-                cam_idx = rays.cam_idx[..., 0]
-                glo_vec = glo_vecs(cam_idx)
+        if self.num_glo_features > 0:            
+            if not zero_glo:                
+                cam_idx = rays.cam_idx[..., 0] # (BS)
+                glo_vec = self.glo_vecs(cam_idx) # (BS, 4)
             else:
+                #cam_idx = torch.arange(0, self.num_glo_embeddings, device=rays[0].device) #(self.num_glo_embeddings)
+                #glo_vec = (self.glo_vecs(cam_idx)).mean(dim=0) #(self.num_glo_embeddings, 4)
+                #glo_vec = torch.broadcast_to(glo_vec, (rays[0].shape[0], self.num_glo_features))
+
                 glo_vec = torch.zeros(rays.origins.shape[:-1] + (self.num_glo_features,), device=rays[0].device)
         else:
             glo_vec = None

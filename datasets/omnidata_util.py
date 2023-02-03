@@ -104,10 +104,15 @@ if __name__ == '__main__':
     #task = 'normal'
     #scene = '708'
     #prep = False
-    scenes = ['708', '710', '738', '758', '781']
+    datafolder = 'scannet'
+    scenes = ['scene0708_00', 'scene0710_00', 'scene0738_00', 'scene0758_00', 'scene0781_00']
+    
     inferences = [True, False]
     splits = ['train', 'test']
     tasks = ['depth', 'normal']
+    datafolder = 'matterport'
+    scenes = ['room_0', 'room_1', 'room_2']
+    
    
     for scene in scenes:
         for split in splits:
@@ -116,13 +121,13 @@ if __name__ == '__main__':
                 sizes = (512, 512)
                 folder_in = 'rgb'
                 folder_out = 'omnidata'            
-                in_path = f'/home/sheldrick/master/data/matterport/scene0{scene}_00/{split}/{folder_in}/'
-                out_path = f'/home/sheldrick/master/data/matterport/scene0{scene}_00/{split}/{folder_out}/'
+                in_path = f'/home/sheldrick/master/data/{datafolder}/{scene}/{split}/{folder_in}/'
+                out_path = f'/home/sheldrick/master/data/{datafolder}/{scene}/{split}/{folder_out}/'
                 batched_warp(in_path, out_path, sizes, task)
 
                 #run inference and save results
-                omni_path_in = f'/home/sheldrick/master/data/matterport/scene0{scene}_00/{split}/omnidata/'
-                omni_path_out = f'/home/sheldrick/master/data/matterport/scene0{scene}_00/{split}/omni/'
+                omni_path_in = f'/home/sheldrick/master/data/{datafolder}/{scene}/{split}/omnidata/'
+                omni_path_out = f'/home/sheldrick/master/data/{datafolder}/{scene}/{split}/omni/'
                 Path(omni_path_out).mkdir(parents=True, exist_ok=True)
                 subprocess.run(['python', 'demo.py', '--task', f'{task}', '--img_path', omni_path_in, '--output_path', omni_path_out], check=True)
 
@@ -131,8 +136,8 @@ if __name__ == '__main__':
                     sizes = (624, 468)
                     folder_in = 'omni'
                     folder_out = 'omni'
-                    in_path = f'/home/sheldrick/master/data/matterport/scene0{scene}_00/{split}/{folder_in}/'
-                    out_path = f'/home/sheldrick/master/data/matterport/scene0{scene}_00/{split}/{folder_out}/'
+                    in_path = f'/home/sheldrick/master/data/{datafolder}/{scene}/{split}/{folder_in}/'
+                    out_path = f'/home/sheldrick/master/data/{datafolder}/{scene}/{split}/{folder_out}/'
                     batched_warp(in_path, out_path, sizes, task)
                 #else:
         #rmdir omnidata

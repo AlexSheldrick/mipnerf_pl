@@ -72,6 +72,10 @@ class BaseDataset(Dataset):
         self._load_renderings(None) #always load all val images
         self._generate_rays()
 
+    def _init_cam(self):
+        """Generating renderings for a camera path."""
+        raise ValueError('Implement in different dataset.')
+
     def _generate_renderings(self):
         """Generating renderings for a camera path."""
         raise ValueError('Implement in different dataset.')
@@ -470,10 +474,11 @@ class ScanNet(BaseDataset):
             # for val and test phase, keep the image shape
             assert batch_type == 'single_image', 'The batch_type can only be single_image without flatten'
             self._val_init()
-        """elif split =='cam':
+        elif split =='cam':
             # for val and test phase, keep the image shape
+            print('initializing video')
             assert batch_type == 'single_image', 'The batch_type can only be single_image without flatten'
-            self._init_cam()"""
+            self._init_cam()
 
     def load_omnidata_depth(self, image_path):
         image_path = image_path.replace('rgb','omni')
@@ -527,12 +532,15 @@ class ScanNet(BaseDataset):
         zs = np.sqrt(xs**2 + ys**2 + 1) 
         depth_var = zs/100
 
-        #depth_var[d_mask] = np.where(0.5*od_mean_std > depth_var[d_mask], 0.5*od_mean_std , depth_var[d_mask])
+        #depth_var[d_mask] = 1.
+        #depth_var[d_mask] = np.where(od_mean_std > depth_var[d_mask], od_mean_std , depth_var[d_mask])
+        depth_var = np.where(0.005 * depth > depth_var, 0.005 * depth, depth_var)
         #depth_var[d_mask] = od_mean_std
-        depth_var[d_mask] = 1.
+        
+        
         depth_var = depth_var[..., None].astype(np.float32)
         depth = depth[..., None].astype(np.float32)
-        return depth, depth_var
+        return depth, depth_var, d_mask[..., None]
 
     def _load_depthmaps(self, image_path, max_depth):
         omni_depth = self.load_omnidata_depth(image_path)
@@ -542,10 +550,10 @@ class ScanNet(BaseDataset):
             [halfres_h, halfres_w] = [hw // 2 for hw in depth.shape[:2]]        
             depth = resize(depth, (halfres_h, halfres_w), order=0, anti_aliasing=False)
 
-        depth, depth_var = self.prepare_depthmap(depth, omni_depth, max_depth)
+        depth, depth_var, depth_mask = self.prepare_depthmap(depth, omni_depth, max_depth)
         #depth = filters.gaussian(depth, sigma=1.0, truncate=3.)
         #depth[depth > 100] = 0  #values >= 65504 (float16 max) are in fact zero      
-        return depth, depth_var
+        return depth, depth_var, depth_mask
         #depth = self.transform(depth).flatten().unsqueeze(1) #/ self.scale #(h*w/4,1)
 
     def _load_normalmaps(self, image_path):
@@ -676,6 +684,7 @@ class ScanNet(BaseDataset):
         depths = []
         depth_vars = []
         normals = []
+        depth_masks = []
         #scale = 1/8
         scale = 1.0
         scale_mat = np.diag(np.array([scale,]*4, dtype=np.float32)) #@ pose
@@ -695,9 +704,10 @@ class ScanNet(BaseDataset):
             if self.white_bkgd and image.shape[-1] > 3:
                 image = image[..., :3] * image[..., -1:] + (1. - image[..., -1:])
             images.append(image[..., :3].astype(np.float16))
-            depth, depth_var = self._load_depthmaps(fname, max_depth)
+            depth, depth_var, depth_mask = self._load_depthmaps(fname, max_depth)
             depths.append(depth)
             depth_vars.append(depth_var)
+            depth_masks.append(depth_mask)
             normals.append(self._load_normalmaps(fname))
             
         """pose = np.array(cams)
@@ -711,6 +721,7 @@ class ScanNet(BaseDataset):
         self.images = images
         self.depths = depths
         self.depth_vars = depth_vars
+        self.depth_masks = depth_masks
         self.normals = normals
         self.near = meta['near']
         self.far = meta['far']
@@ -775,7 +786,7 @@ class ScanNet(BaseDataset):
         #normal_reordered[:, :, :, 1] = - normal_reordered[:, :, :, 1]
         #normal = np.split(normal_reordered, normal_reordered.shape[0])
         #normal = [n.squeeze() for n in normal]
-        mask = [(d > 0).astype(np.float32) for d in self.depths]
+        mask = [d for d in self.depth_masks]
 
         self.rays = Rays(
             origins=origins,
