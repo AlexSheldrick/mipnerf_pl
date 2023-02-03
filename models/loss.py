@@ -49,8 +49,8 @@ class MSELoss(nn.Module):
             with torch.no_grad(): psnr = calc_psnr(results['rgb_fine'], targets['rgb'])
         
         
-        anneal_lr = max(1.0 - 3*step/self.max_steps, 0.1)
-        anneal_distortion = max(1.0 - 2*step/self.max_steps, 0)
+        anneal_lr = max(1.0 - 4*step/self.max_steps, 0)
+        #anneal_distortion = max(1.0 - 5*step/self.max_steps, 0)
         #anneal_lr = 1
         #anneal_lr_reverse = 2 - anneal_lr
         total_loss = rgb_loss +  \

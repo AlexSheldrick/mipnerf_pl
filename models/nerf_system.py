@@ -102,7 +102,7 @@ class MipNeRFSystem(LightningModule):
                                      num_images=self.hparams['train.num_images']
                                      )
         self.val_dataset = dataset(data_dir=self.hparams['data_path'],
-                                   split='test',
+                                   split='val',
                                    white_bkgd=self.hparams['val.white_bkgd'],
                                    batch_type=self.hparams['val.batch_type']
                                    )
