@@ -49,7 +49,7 @@ class MSELoss(nn.Module):
             with torch.no_grad(): psnr = calc_psnr(results['rgb_fine'], targets['rgb'])
         
         
-        anneal_lr = max(1.0 - 3*step/self.max_steps, 0)
+        anneal_lr = max(1.0 - 4*step/self.max_steps, 0)
         #anneal_distortion = max(1.0 - 5*step/self.max_steps, 0)
         #anneal_lr = 1
         #anneal_lr_reverse = 2 - anneal_lr
@@ -59,7 +59,7 @@ class MSELoss(nn.Module):
                         self.lambda_normal * normal_loss + \
                         self.lambda_normal * chord_loss + \
                         self.lambda_orientation * orientation_loss + \
-                        anneal_lr * self.lambda_distortion * distortion_loss + \
+                        self.lambda_distortion * distortion_loss + \
                         #anneal_distortion * self.lambda_distortion * distortion_loss + \
                         anneal_lr * self.lambda_near_loss * near_loss + \
                         anneal_lr * self.lambda_empty_loss * empty_loss #+ 0.1*self.lambda_near_loss * incomplete_penalty \

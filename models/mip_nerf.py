@@ -122,7 +122,7 @@ class MLP(torch.nn.Module):
                 glo_vec = torch.broadcast_to(glo_vec[..., None, :],
                                             bottleneck.shape[:-1] + glo_vec.shape[-1:])
                 #x.append(glo_vec)
-            x = torch.cat([x, glo_vec], dim=-1)
+                x = torch.cat([x, glo_vec], dim=-1)
             # Here use 1 extra layer to align with the original nerf model.
             x = self.view_layers(x)
 
@@ -186,7 +186,7 @@ class MipNerf(torch.nn.Module):
         self.resample_padding = resample_padding  # Dirichlet/alpha "padding" on the histogram.
         self.stop_resample_grad = stop_resample_grad  # If True, don't backprop across levels')
         mlp_xyz_dim = (max_deg_point - min_deg_point) * 3 * 2
-        mlp_view_dim = deg_view * 3 * 2 + 4
+        mlp_view_dim = deg_view * 3 * 2 + num_glo_features
         mlp_view_dim = mlp_view_dim + 3 if append_identity else mlp_view_dim
         self.mlp = MLP(mlp_net_depth, mlp_net_width, mlp_net_depth_condition, mlp_net_width_condition,
                        mlp_skip_index, mlp_num_rgb_channels, mlp_num_density_channels, mlp_net_activation,

@@ -208,11 +208,8 @@ class Blender(BaseDataset):
         if self.factor == 2: 
             [halfres_h, halfres_w] = [hw // 2 for hw in depth.shape[:2]]        
             depth = resize(depth, (halfres_h, halfres_w), order=0, anti_aliasing=False)
-        depth[depth > 100] = 0
-        #depth = filters.gaussian(depth, sigma=1.0, truncate=3.)
-        #depth[depth > 100] = 0  #values >= 65504 (float16 max) are in fact zero      
+        depth[depth > 100] = 0  
         return depth
-        #depth = self.transform(depth).flatten().unsqueeze(1) #/ self.scale #(h*w/4,1)
 
     def _load_normalmaps(self, image_path):
         normals = pyexr.open(image_path.replace('.png','_normal_0001.exr')).get() #(h,w,1)
@@ -237,7 +234,8 @@ class Blender(BaseDataset):
         normals = []
         for i in range(len(meta['frames'][:num_images])):
             frame = meta['frames'][i]
-            fname = os.path.join(self.data_dir, frame['file_path'] + '.png')
+            idx = frame['file_path'].split('/')[-1]
+            fname = os.path.join(self.data_dir, self.split + '/' + idx + '.png')
             with open(fname, 'rb') as imgin:
                 image = np.array(Image.open(imgin), dtype=np.float32) / 255.
                 if self.factor == 2:
@@ -294,6 +292,8 @@ class Blender(BaseDataset):
         lossmults = broadcast_scalar_attribute(1).copy()
         nears = broadcast_scalar_attribute(self.near).copy()
         fars = broadcast_scalar_attribute(self.far).copy()
+        depth_var = broadcast_scalar_attribute(0.).copy()
+        cam_idx = broadcast_scalar_attribute(0.).copy()
 
         # Distance from each unit-norm direction vector to its x-axis neighbor.
         dx = [
@@ -308,6 +308,8 @@ class Blender(BaseDataset):
         depth = [d for d in self.depths]
         normal = [n for n in self.normals]
         mask = [(d > 0).astype(np.float32) for d in self.depths]
+        #depth_var = [np.zeros_like(depth) for d in self.depths]
+        #cam_idx = [x * np.ones_like(origins[x][..., :1]) for x in range(len(self.images))]
 
         self.rays = Rays(
             origins=origins,
@@ -319,7 +321,9 @@ class Blender(BaseDataset):
             far=fars,
             depth=depth,
             normal=normal,
-            mask = mask)
+            mask = mask,
+            depth_vars=depth_var,
+            cam_idx = cam_idx)
         #del origins, directions, viewdirs, radii, lossmults, nears, fars, camera_dirs
 
 class Matterport(BaseDataset):
@@ -511,7 +515,7 @@ class ScanNet(BaseDataset):
 
         # Depth = scale * omnidepth + offset
         scaled_od = h[0] * omni_depth + h[1]
-        #depth[d_mask] = h[0] * omni_depth[d_mask] + h[1]
+        depth[d_mask] = h[0] * omni_depth[d_mask] + h[1]
         #depth = h[0] * omni_depth + h[1]
         od_mean_dev = ((scaled_od)).mean()
         od_mean_std = np.sqrt(((scaled_od - od_mean_dev) **2).mean())
@@ -527,7 +531,7 @@ class ScanNet(BaseDataset):
         zs = np.sqrt(xs**2 + ys**2 + 1) 
         depth_var = zs/100
 
-        #depth_var[d_mask] = np.where(0.5*od_mean_std > depth_var[d_mask], 0.5*od_mean_std , depth_var[d_mask])
+        depth_var[d_mask] = np.where(0.5*od_mean_std > depth_var[d_mask], 0.5*od_mean_std , depth_var[d_mask])
         #depth_var[d_mask] = od_mean_std
         depth_var[d_mask] = 1.
         depth_var = depth_var[..., None].astype(np.float32)
