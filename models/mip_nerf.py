@@ -59,25 +59,26 @@ class MLP(torch.nn.Module):
         del layers
         self.density_layer = torch.nn.Linear(net_width, num_density_channels)
         _xavier_init(self.density_layer)
-        self.extra_layer = torch.nn.Linear(net_width, net_width)  # extra_layer is not the same as NeRF
-        _xavier_init(self.extra_layer)
-        layers = []
-        for i in range(net_depth_condition):
-            if i == 0:
-                dim_in = net_width + view_dim
-                dim_out = net_width_condition
-            else:
-                dim_in = net_width_condition
-                dim_out = net_width_condition
-            linear = torch.nn.Linear(dim_in, dim_out)
-            _xavier_init(linear)
-            if activation == 'relu':
-                layers.append(torch.nn.Sequential(linear, torch.nn.ReLU(True)))
-            else:
-                raise NotImplementedError
-        self.view_layers = torch.nn.Sequential(*layers)
-        del layers
+        
         if not prop_mlp:
+            self.extra_layer = torch.nn.Linear(net_width, net_width)  # extra_layer is not the same as NeRF
+            _xavier_init(self.extra_layer)
+            layers = []
+            for i in range(net_depth_condition):
+                if i == 0:
+                    dim_in = net_width + view_dim
+                    dim_out = net_width_condition
+                else:
+                    dim_in = net_width_condition
+                    dim_out = net_width_condition
+                linear = torch.nn.Linear(dim_in, dim_out)
+                _xavier_init(linear)
+                if activation == 'relu':
+                    layers.append(torch.nn.Sequential(linear, torch.nn.ReLU(True)))
+                else:
+                    raise NotImplementedError
+            self.view_layers = torch.nn.Sequential(*layers)
+            del layers
             self.color_layer = torch.nn.Linear(net_width_condition, num_rgb_channels)
 
     def forward(self, x, view_direction=None, glo_vec=None):
@@ -108,20 +109,20 @@ class MLP(torch.nn.Module):
         
         raw_density = self.density_layer(x)
         
-        if view_direction is not None:
+        if (view_direction is not None) or (glo_vec is not None):
             # Output of the first part of MLP.
-            bottleneck = self.extra_layer(x)
+            x = self.extra_layer(x)
             # Broadcast condition from [batch, feature] to
             # [batch, num_samples, feature] since all the samples along the same ray
             # have the same viewdir.
             # view_direction: [B, 2*3*L] -> [B, N, 2*3*L]
-            view_direction = repeat(view_direction, 'batch feature -> batch sample feature', sample=num_samples)
-            x = torch.cat([bottleneck, view_direction], dim=-1)
+            if (view_direction is not None):
+                view_direction = repeat(view_direction, 'batch feature -> batch sample feature', sample=num_samples)
+                x = torch.cat([x, view_direction], dim=-1)
 
             if glo_vec is not None:
                 glo_vec = torch.broadcast_to(glo_vec[..., None, :],
-                                            bottleneck.shape[:-1] + glo_vec.shape[-1:])
-                #x.append(glo_vec)
+                                            x.shape[:-1] + glo_vec.shape[-1:])
                 x = torch.cat([x, glo_vec], dim=-1)
             # Here use 1 extra layer to align with the original nerf model.
             x = self.view_layers(x)
@@ -352,13 +353,12 @@ class MipNerf(torch.nn.Module):
                         max_deg=self.deg_view,
                         append_identity=True,
                     )
+                else: viewdirs_enc = None
                     
-                    if not self.prop_mlp or (i_level == (self.num_levels - 1)):
-                        raw_rgb, raw_density = self.mlp(samples_enc, viewdirs_enc, glo_vec)
-                    else:
-                        raw_density = self.prop_mlp(samples_enc, viewdirs_enc, glo_vec)
+                if not self.prop_mlp or (i_level == (self.num_levels - 1)):
+                    raw_rgb, raw_density = self.mlp(samples_enc, viewdir=viewdirs_enc, glo_vec = glo_vec)
                 else:
-                    raw_rgb, raw_density = self.mlp(samples_enc, glo_vec)
+                    raw_density = self.prop_mlp(samples_enc, viewdir=None, glo_vec = None)
             
             elif compute_normals and (i_level == (self.num_levels - 1)):
                 raw_rgb, raw_density, normals = self.gradient(means_covs, rays.viewdirs, glo_vec)
@@ -434,18 +434,20 @@ class MipNerf(torch.nn.Module):
         means_covs[1].requires_grad_()
         GraphBools = self.training           
         with torch.enable_grad():
-            view_direction_encoded = pos_enc(
-                        viewdirs,
-                        min_deg=0,
-                        max_deg=self.deg_view,
-                        append_identity=True,
-                    )
+            if self.use_viewdirs:
+                view_direction_encoded = pos_enc(
+                            viewdirs,
+                            min_deg=0,
+                            max_deg=self.deg_view,
+                            append_identity=True,
+                        )
+            else: view_direction_encoded = None
             samples_enc = integrated_pos_enc(
                     means_covs,
                     self.min_deg_point,
                     self.max_deg_point,
                 )  
-            raw_rgb, raw_density = self.mlp(samples_enc, view_direction_encoded, glo_vec)
+            raw_rgb, raw_density = self.mlp(samples_enc, viewdirs= view_direction_encoded, glo_vec=glo_vec)
             d_output = torch.ones_like(raw_density, requires_grad=GraphBools, device=raw_density.device)
             normals = torch.autograd.grad(
                 outputs=raw_density,
