@@ -189,6 +189,7 @@ class MipNerf(torch.nn.Module):
         mlp_xyz_dim = (max_deg_point - min_deg_point) * 3 * 2
         mlp_view_dim = deg_view * 3 * 2 + num_glo_features
         mlp_view_dim = mlp_view_dim + 3 if append_identity else mlp_view_dim
+        if not self.use_viewdirs: mlp_view_dim = 0 + num_glo_features
         self.mlp = MLP(mlp_net_depth, mlp_net_width, mlp_net_depth_condition, mlp_net_width_condition,
                        mlp_skip_index, mlp_num_rgb_channels, mlp_num_density_channels, mlp_net_activation,
                        mlp_xyz_dim, mlp_view_dim, prop_mlp=False)
