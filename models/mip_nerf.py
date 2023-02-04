@@ -127,10 +127,10 @@ class MLP(torch.nn.Module):
             # Here use 1 extra layer to align with the original nerf model.
             x = self.view_layers(x)
 
-        if view_direction is None:
-            return raw_density, x
+        #if view_direction is None:
+        #    return raw_density, x
 
-        elif not self.prop_mlp:
+        if not self.prop_mlp:
             raw_rgb = self.color_layer(x)
             return raw_rgb, raw_density
         
@@ -356,9 +356,9 @@ class MipNerf(torch.nn.Module):
                 else: viewdirs_enc = None
                     
                 if not self.prop_mlp or (i_level == (self.num_levels - 1)):
-                    raw_rgb, raw_density = self.mlp(samples_enc, viewdir=viewdirs_enc, glo_vec = glo_vec)
+                    raw_rgb, raw_density = self.mlp(samples_enc, viewdirs_enc, glo_vec = glo_vec)
                 else:
-                    raw_density = self.prop_mlp(samples_enc, viewdir=None, glo_vec = None)
+                    raw_density = self.prop_mlp(samples_enc, view_direction=None, glo_vec = None)
             
             elif compute_normals and (i_level == (self.num_levels - 1)):
                 raw_rgb, raw_density, normals = self.gradient(means_covs, rays.viewdirs, glo_vec)
@@ -447,7 +447,7 @@ class MipNerf(torch.nn.Module):
                     self.min_deg_point,
                     self.max_deg_point,
                 )  
-            raw_rgb, raw_density = self.mlp(samples_enc, viewdirs= view_direction_encoded, glo_vec=glo_vec)
+            raw_rgb, raw_density = self.mlp(samples_enc, view_direction = view_direction_encoded, glo_vec=glo_vec)
             d_output = torch.ones_like(raw_density, requires_grad=GraphBools, device=raw_density.device)
             normals = torch.autograd.grad(
                 outputs=raw_density,
