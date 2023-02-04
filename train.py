@@ -19,7 +19,7 @@ parser = argparse.ArgumentParser()
 #parser.add_argument("--dataset_name", help="Single or multi data.", type=str, choices=['multi_blender', 'blender'],
 #                    required=True)
 #parser.add_argument("--config", help="Path to config file.", required=False, default='./configs/lego.yaml')
-parser.add_argument("--config", help="Path to config file.", required=False, default='./configs/scannet.yaml')
+parser.add_argument("--config", help="Path to config file.", required=False, default='./configs/lego.yaml')
 parser.add_argument("opts", nargs=argparse.REMAINDER,
                     help="Modify hparams. Example: train.py resume out_dir TRAIN.BATCH_SIZE 2")
 
@@ -124,8 +124,8 @@ def main(hparams):
     )
     if hparams['checkpoint.resume_path'] is not None:
         print(f"resume training from {hparams['checkpoint.resume_path']}")
-    #trainer.fit(system, ckpt_path=hparams['checkpoint.resume_path'])
-    trainer.fit(system)
+    trainer.fit(system, ckpt_path=hparams['checkpoint.resume_path'])
+    #trainer.fit(system)
     #   profiler.export_chrome_trace("trace.json")
     #model = system.load_from_checkpoint("/home/sheldrick/master/mipnerf_pl/OUT/scannet/ckpt/scannet-710_GLO/epoch-38_step-25000_psnr-val_psnr22.4093.ckpt")
     #model.eval()

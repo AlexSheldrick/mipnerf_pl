@@ -73,4 +73,4 @@ loss:
 
   lambda_prop_loss: 1.0 #1.0 
 checkpoint:
-  resume_path: /media/alex/SSD Datastorage/mipnerf_pl/OUT/new/ckpt/lego-100/last.ckpt #'/home/sheldrick/master/mipnerf_pl/OUT/ckpt/lego-120-D-Test/last.ckpt'
+  resume_path: None #/media/alex/SSD Datastorage/mipnerf_pl/OUT/new/ckpt/lego-100/last.ckpt #'/home/sheldrick/master/mipnerf_pl/OUT/ckpt/lego-120-D-Test/last.ckpt'

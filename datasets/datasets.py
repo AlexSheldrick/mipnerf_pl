@@ -311,7 +311,7 @@ class Blender(BaseDataset):
 
         depth = [d for d in self.depths]
         normal = [n for n in self.normals]
-        mask = [(d > 0).astype(np.float32) for d in self.depths]
+        mask = [(d > 0) for d in self.depths]
         #depth_var = [np.zeros_like(depth) for d in self.depths]
         #cam_idx = [x * np.ones_like(origins[x][..., :1]) for x in range(len(self.images))]
 
