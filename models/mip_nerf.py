@@ -120,6 +120,7 @@ class MLP(torch.nn.Module):
                 view_direction = repeat(view_direction, 'batch feature -> batch sample feature', sample=num_samples)
                 x = torch.cat([x, view_direction], dim=-1)
 
+            # view_direction: [B, 4] -> [B, N, 4]
             if glo_vec is not None:
                 glo_vec = torch.broadcast_to(glo_vec[..., None, :],
                                             x.shape[:-1] + glo_vec.shape[-1:])
@@ -190,6 +191,8 @@ class MipNerf(torch.nn.Module):
         mlp_view_dim = deg_view * 3 * 2 + num_glo_features
         mlp_view_dim = mlp_view_dim + 3 if append_identity else mlp_view_dim
         if not self.use_viewdirs: mlp_view_dim = 0 + num_glo_features
+        self.encode_glo = True
+        if self.encode_glo: mlp_view_dim = num_glo_features * 4 * 2 + mlp_view_dim
         self.mlp = MLP(mlp_net_depth, mlp_net_width, mlp_net_depth_condition, mlp_net_width_condition,
                        mlp_skip_index, mlp_num_rgb_channels, mlp_num_density_channels, mlp_net_activation,
                        mlp_xyz_dim, mlp_view_dim, prop_mlp=False)
@@ -226,7 +229,7 @@ class MipNerf(torch.nn.Module):
         
         #self.pos_basis_t = torch.from_numpy(generate_basis('icosahedron', 2)).to(torch.float16).to(device='cuda:0') # self.basis_shape : 'icosahedron'  // self.basis_subdivisions : 2
 
-    def forward(self, rays: namedtuple, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0, zero_glo = True):
+    def forward(self, rays: namedtuple, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0, zero_glo: bool = True):
         """The mip-NeRF Model.
         Args:
             rays: util.Rays, a namedtuple of ray origins, directions, and viewdirs.
@@ -235,9 +238,10 @@ class MipNerf(torch.nn.Module):
         Returns:
             ret: list, [*(rgb, distance, acc)]
         """
+        
         if self.num_glo_features > 0:            
             if not zero_glo:                
-                cam_idx = rays.cam_idx[..., 0] # (BS)
+                cam_idx = (rays.cam_idx[..., 0]).int() # (BS)
                 glo_vec = self.glo_vecs(cam_idx) # (BS, 4)
             else:
                 #cam_idx = torch.arange(0, self.num_glo_embeddings, device=rays[0].device) #(self.num_glo_embeddings)
@@ -245,6 +249,14 @@ class MipNerf(torch.nn.Module):
                 #glo_vec = torch.broadcast_to(glo_vec, (rays[0].shape[0], self.num_glo_features))
 
                 glo_vec = torch.zeros(rays.origins.shape[:-1] + (self.num_glo_features,), device=rays[0].device)
+            
+            if self.encode_glo:
+                    glo_vec = pos_enc(
+                        glo_vec,
+                        min_deg=0,
+                        max_deg=4,
+                        append_identity=True,
+                    )
         else:
             glo_vec = None
 

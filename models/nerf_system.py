@@ -68,28 +68,12 @@ class MipNeRFSystem(LightningModule):
             num_glo_embeddings = hparams['nerf.mlp.num_glo_embeddings'],
             num_glo_features = hparams['nerf.mlp.num_glo_features'],
         )
+        self.val_idx = 0
 
 
     def forward(self, batch_rays: torch.Tensor, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0, zero_glo = True):
         # TODO make a multi chunk
-        """
-        B = batch_rays.directions.shape[0]
-        chunk = 1*1024
-        res = defaultdict(list)
-        coarse = []
-        fine = []
-        for i in range(0, B, chunk):
-            #('origins', 'directions', 'viewdirs', 'radii', 'lossmult', 'near', 'far')
-            ray_chunk = Rays(batch_rays.origins[i:i+chunk], batch_rays.directions[i:i+chunk], batch_rays.viewdirs[i:i+chunk], \
-                        batch_rays.radii[i:i+chunk], batch_rays.lossmult[i:i+chunk], batch_rays.near[i:i+chunk],batch_rays.far[i:i+chunk])
-            #ray_chunk = Rays(*ray_chunk)
-            rendered_ray_chunks = \
-                self.mip_nerf(ray_chunk, randomized,
-                            white_bkgd)
-
-        """
-
-        res = self.mip_nerf(batch_rays, randomized, white_bkgd, compute_normals, eps)  # num_layers result
+        res = self.mip_nerf(batch_rays, randomized, white_bkgd, compute_normals, eps, zero_glo)  # num_layers result
         return res
 
     def setup(self, stage):
@@ -102,7 +86,7 @@ class MipNeRFSystem(LightningModule):
                                      num_images=self.hparams['train.num_images']
                                      )
         self.val_dataset = dataset(data_dir=self.hparams['data_path'],
-                                   split='val',
+                                   split='test',
                                    white_bkgd=self.hparams['val.white_bkgd'],
                                    batch_type=self.hparams['val.batch_type']
                                    )
@@ -118,7 +102,6 @@ class MipNeRFSystem(LightningModule):
         scheduler = MipLRDecay(optimizer, self.hparams['optimizer.lr_init'], self.hparams['optimizer.lr_final'],
                                self.hparams['optimizer.max_steps'], self.hparams['optimizer.lr_delay_steps'],
                                self.hparams['optimizer.lr_delay_mult'])
-        #print(optimizer)
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step'}]
 
     def train_dataloader(self):
@@ -172,8 +155,9 @@ class MipNeRFSystem(LightningModule):
             targets = {'rgb': rgbs[..., :3].view(-1,3), 'depth': rays.depth.view(-1), 'normal': rays.normal.view(-1,3), 'dirs': rays.viewdirs.view(-1,3), 
                         'mask': ret['mask'], 'var':rays.depth_vars, 'dmask': rays.mask.view(-1)} #
             loss_dict = self.loss(ret, targets, mask=ret['mask'])
-            if batch_nb == 0:
+            if batch_nb == self.val_idx:
                 self.write_imgs_to_tensorboard(ret, rays, rgbs, 'val')
+                self.val_idx = torch.randint(low=0, high=self.val_dataset.n_examples, size=(1,))[0]
             return loss_dict
 
     def test_step(self, batch, batch_nb):
@@ -218,7 +202,7 @@ class MipNeRFSystem(LightningModule):
 
     def mean_metrics(self, outputs, mode='val'):
         with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.amp):
-            ret, rays, rgbs = self.render_image(None, mode='train')
+            ret, rays, rgbs = self.render_image(None, mode='train', zero_glo=False)
             self.write_imgs_to_tensorboard(ret, rays, rgbs, 'train')
         try:
             mean_loss = torch.stack([x['total'] for x in outputs]).mean()
@@ -265,7 +249,7 @@ class MipNeRFSystem(LightningModule):
     #def on_before_backward(self, loss: torch.Tensor) -> None:
     #    return self.scaler.scale(loss) / self.hparams['train.batch_size']
 
-    def render_image(self, batch, mode='val', chunk_size = None):
+    def render_image(self, batch, mode='val', chunk_size = None, zero_glo = True):
         if chunk_size == None: chunk_size = self.val_chunk_size
         results = defaultdict(list)
         if mode=='val':
@@ -288,7 +272,7 @@ class MipNeRFSystem(LightningModule):
         with torch.no_grad():
             for batch_rays in single_image_rays:
                 with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.amp):
-                    ret_chunks  = self(batch_rays, self.val_randomized, self.white_bkgd, True)
+                    ret_chunks  = self(batch_rays, self.val_randomized, self.white_bkgd, compute_normals=True, zero_glo=zero_glo)
                     for k, v in ret_chunks.items():
                         results[k] += [v]                    
         

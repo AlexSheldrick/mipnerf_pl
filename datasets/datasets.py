@@ -520,7 +520,7 @@ class ScanNet(BaseDataset):
 
         # Depth = scale * omnidepth + offset
         scaled_od = h[0] * omni_depth + h[1]
-        depth[d_mask] = h[0] * omni_depth[d_mask] + h[1]
+        #depth[d_mask] = h[0] * omni_depth[d_mask] + h[1]
         #depth = h[0] * omni_depth + h[1]
         od_mean_dev = ((scaled_od)).mean()
         od_mean_std = np.sqrt(((scaled_od - od_mean_dev) **2).mean())
@@ -538,10 +538,12 @@ class ScanNet(BaseDataset):
 
         #depth_var[d_mask] = 1.
         #depth_var[d_mask] = np.where(od_mean_std > depth_var[d_mask], od_mean_std , depth_var[d_mask])
-        depth_var = np.where(0.005 * depth > depth_var, 0.005 * depth, depth_var)
+        #depth_var = np.where(0.01 * depth > depth_var, 0.01 * depth, depth_var)
+        
         #depth_var[d_mask] = od_mean_std
         
-        
+        depth_var = 0.01 * depth 
+
         depth_var = depth_var[..., None].astype(np.float32)
         depth = depth[..., None].astype(np.float32)
         return depth, depth_var, d_mask[..., None]
@@ -640,7 +642,7 @@ class ScanNet(BaseDataset):
         lossmults = broadcast_scalar_attribute(1).copy()
         nears = broadcast_scalar_attribute(self.near).copy()
         fars = broadcast_scalar_attribute(self.far).copy()
-        cam_idx = [x * np.ones_like(origins[x][..., :1]) for x in range(len(self.images))]
+        cam_idx = [int(x * np.ones_like(origins[x][..., :1])) for x in range(len(self.images))]
 
         # Distance from each unit-norm direction vector to its x-axis neighbor.
         dx = [
