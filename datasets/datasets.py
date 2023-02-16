@@ -229,8 +229,8 @@ class Blender(BaseDataset):
                 
 
     def _load_renderings(self, num_images):
-        """Load images from disk."""
-        with open(path.join(self.data_dir, 'transforms_{}.json'.format(self.split)), 'r') as fp:
+        """Load images from disk."""        
+        with open(path.join(self.data_dir, f'transforms_{self.split}.json'), 'r') as fp:
             meta = json.load(fp)
         images = []
         cams = []
@@ -311,7 +311,7 @@ class Blender(BaseDataset):
 
         depth = [d for d in self.depths]
         normal = [n for n in self.normals]
-        mask = [(d > 0) for d in self.depths]
+        mask = [(d <= 0) for d in self.depths] #mask: invalid pixels i.e. depth == zero pixels
         #depth_var = [np.zeros_like(depth) for d in self.depths]
         #cam_idx = [x * np.ones_like(origins[x][..., :1]) for x in range(len(self.images))]
 

@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import numpy as np
 
 class MSELoss(nn.Module):
     def __init__(self, hparams):
@@ -15,15 +16,28 @@ class MSELoss(nn.Module):
         self.lambda_prop_loss = hparams['loss.lambda_prop_loss']
         self.prop_mlp=hparams['nerf.mlp.prop_mlp'] 
         self.max_steps = hparams['optimizer.max_steps']
+        self.mlp_normals = hparams['nerf.mlp.mlp_normals']
     
     def forward(self, results, targets, mask=None, step = 1):
         #if mask is None: 
         mask = None
         dmask = (targets['dmask'])
         depth_loss = self.MSEloss(results['depth'][~dmask], targets['depth'][~dmask])
-        orientation_loss = orientation_loss_func(results, targets)             
-        normal_loss = norm_loss_func(results, targets)
-        chord_loss = chord_distance(results, targets)
+        
+        if self.mlp_normals:
+            normal_loss = norm_loss_func(pred_ = results['mlp_normals'], gt_ = results['density_normals'], w_ = results['weights'], self_supervised=True)
+            chord_loss = chord_distance(pred_ = results['mlp_normals'], gt_ = results['density_normals'], w_ = results['weights'], self_supervised=True)
+
+            mlp_normal_loss = norm_loss_func(pred_ = results['mlp_normals'], gt_ = targets['normal'], w_ = results['weights'])
+            mlp_chord_loss = chord_distance(pred_ = results['mlp_normals'], gt_ = targets['normal'], w_ = results['weights'])
+
+            normal_loss = (normal_loss + mlp_normal_loss)/2
+            chord_loss = (chord_loss + mlp_chord_loss)/2
+        else:             
+            normal_loss = norm_loss_func(pred_ = results['density_normals'], gt_ = targets['normal'], w_ = results['weights'])
+            chord_loss = chord_distance(pred_ = results['density_normals'], gt_ = targets['normal'], w_ = results['weights'])
+        
+        orientation_loss = orientation_loss_func(results['density_normals'], targets['normal'], results['weights'], targets['dirs'])
         normal_loss_lowerbounded = results['normal_lowerbound_error'].sum()
         #distortion_loss = self.lossfun_distortion(results['t_samples'], results['weights'])
         distortion_loss = results['distortion'].mean()
@@ -49,15 +63,15 @@ class MSELoss(nn.Module):
             with torch.no_grad(): psnr = calc_psnr(results['rgb_fine'], targets['rgb'])
         
         
-        anneal_lr = max(1.0 - 2*step/self.max_steps, 0)
+        #anneal_lr = max(1.0 - 2.5*step/self.max_steps, 0)
         #anneal_distortion = max(1.0 - 5*step/self.max_steps, 0)
-        #anneal_lr = 1
+        anneal_lr = 1
         #anneal_lr_reverse = 2 - anneal_lr
         total_loss = rgb_loss +  \
                         (self.lambda_depth * depth_loss + \
                         #self.lambda_normal * normal_loss_lowerbounded + \
                         self.lambda_normal * normal_loss + \
-                        self.lambda_normal * chord_loss + \
+                        #self.lambda_normal * chord_loss + \
                         self.lambda_orientation * orientation_loss + \
                         self.lambda_distortion * distortion_loss + \
                         #anneal_distortion * self.lambda_distortion * distortion_loss + \
@@ -109,8 +123,8 @@ class MSELoss(nn.Module):
 
         return loss_inter + loss_intra
 
-def charbonnier_loss(x: torch.Tensor, y: torch.Tensor):
-    return torch.mean(torch.sqrt((x - y) ** 2 + 0.001))
+def charbonnier_loss(x: torch.Tensor, y: torch.Tensor, eps = 0.001):
+    return torch.mean(torch.sqrt((x - y) ** 2 + eps)) #omitted eps**2
 
 #### INDEXING TENSORS REQUIRES GPU SYNC. WRITE GATHER INSTRUCTION INSTEAD
 @torch.jit.script
@@ -129,6 +143,7 @@ def calc_psnr(x: torch.Tensor, y: torch.Tensor):
     psnr = -10.0 * torch.log10(mse)
     return psnr
 
+
 @torch.jit.script
 def calc_psnr_(mse: torch.Tensor):
     """
@@ -141,22 +156,22 @@ def calc_psnr_(mse: torch.Tensor):
 #multiplying with binary vector (in floats) is faster than masked indexing because it doesnt call cuda::nonzero
 #sum over sum of mask to have proper mean
 @torch.jit.script
-def norm_loss_func(results: dict[str, torch.Tensor], targets: dict[str, torch.Tensor]):
+def norm_loss_func(pred_: torch.Tensor, gt_: torch.Tensor, w_: torch.Tensor, self_supervised: bool = False):
     # use only those normals that have non-zero (or above threshhold) depth
-    #mask = targets['mask'] # (BS) 
-    mask = (torch.any(targets['normal'], dim=-1))
-    valid_pixels = mask.sum()
-    w = results['weights'] * mask[..., None] # (BS, num_raysamples) --> set invalid pixels to zero (by making all the sample weights zero via mask)
-    #w = results['normal_weights'] * mask[..., None] # (BS, N_raysamples)
-    
-    n_pred = results['normal'] # (BS, num_samples, 3)
-    n = (targets['normal']) # (BS, 3)
-
-    # MAE of Normal alignment
-    loss = (1 -  torch.sum(n[:,None,:] * n_pred, dim=-1))
-    loss = torch.sum(w * loss, -1) # --> (BS, Num_samples)
-    loss = (loss).sum(dim=-1) # --> (BS)
-    loss = torch.sum(loss) / valid_pixels # --> float, mean via valid pixels rather than batch size
+    #mask = targets['mask'] # (BS)
+    n_pred = pred_ # (BS, num_samples, 3)
+    n = gt_ # (BS, 3)
+    if not self_supervised: 
+        mask = (torch.any(gt_, dim=-1))
+        valid_pixels = mask.sum()
+        w = w_ * mask[..., None] # (BS, num_raysamples) --> set invalid pixels to zero (by making all the sample weights zero via mask)        
+        # MAE of Normal alignment
+        loss = (1 -  torch.sum(n[:,None,:] * n_pred, dim=-1))
+        loss = torch.sum(w * loss, -1) # --> (BS, Num_samples)
+        loss = (loss).sum(dim=-1) # --> (BS)
+        loss = torch.sum(loss) / valid_pixels # --> float, mean via valid pixels rather than batch size
+    else:
+        loss = torch.mean((w_ * (1.0 - torch.sum(n * n_pred, dim=-1))).sum(dim=-1))
     return loss
 
 def l2_normalize(x, eps=1e-6):        
@@ -164,16 +179,16 @@ def l2_normalize(x, eps=1e-6):
     return x / torch.sqrt(torch.maximum(torch.sum(x**2, axis=-1, keepdims=True), torch.as_tensor(eps, x.device)))
 
 @torch.jit.script
-def orientation_loss_func(results: dict[str, torch.Tensor], targets: dict[str, torch.Tensor]):
+def orientation_loss_func(pred_: torch.Tensor, gt_: torch.Tensor, w_: torch.Tensor, dirs: torch.Tensor):
         # use only those normals that have non-zero (or above threshhold) depth
         #mask = targets['mask'] # (BS) 
-        mask = (torch.any(targets['normal'], dim=-1))
+        mask = (torch.any(gt_, dim=-1))
         valid_pixels = mask.sum()
-        w = results['weights'] * mask[..., None] # (BS, N_raysamples)
-        n = results['normal']#(BS, N_raysamples, 3)
+        w = w_ * mask[..., None] # (BS, N_raysamples)
+        n = pred_#(BS, N_raysamples, 3)
 
         # Negate viewdirs to represent normalized vectors from point to camera.
-        v = -1. * targets['dirs'] # (BS, 3)
+        v = -1. * dirs # (BS, 3)
         n_dot_v = (n * v[..., None, :]) #(BS, N_raysamples, 3)
         n_dot_v = n_dot_v.sum(dim=-1) # (BS, N_raysamples)
         return torch.sum((w * torch.minimum(
@@ -182,21 +197,21 @@ def orientation_loss_func(results: dict[str, torch.Tensor], targets: dict[str, t
 
 #@torch.jit.script
 #chord distance (Euclidean distance on a unit circle/circumference, which is the subspace of distances between normalized vectors)   
-def chord_distance(results: dict[str, torch.Tensor], targets: dict[str, torch.Tensor]):
+def chord_distance(pred_: torch.Tensor, gt_: torch.Tensor, w_: torch.Tensor, self_supervised: bool=False):
      # use only those normals that have non-zero (or above threshhold) depth
-    #mask = targets['mask'] # (BS) 
-    mask = (torch.any(targets['normal'], dim=-1))
-    valid_pixels = mask.sum()
-    w = results['weights'] * mask[..., None] # (BS, N_raysamples)
-    #w = results['normal_weights'] * mask[..., None] # (BS, N_raysamples)
-    #n = results['normal']#(BS, N_raysamples, 3)
-    n_pred = results['normal'] # (BS, num_samples, 3)
-    n = targets['normal'] # (BS, 3)
-    loss = n[:,None,:] - n_pred # (BS, num_samples, 3)
-    loss = torch.norm(loss, dim=-1) # (BS, num_samples, 1)
-    loss = (loss**2)/2 # (BS, num_samples)
-    loss = torch.sum(w * loss, dim=1) # (BS) per ray loss
-    loss = torch.sum(loss)/valid_pixels # float, averaged by valid pixels
+    n_pred = pred_ # (BS, num_samples, 3)
+    n = gt_ # (BS, 3)
+    if not self_supervised:
+        mask = (torch.any(gt_, dim=-1))
+        valid_pixels = mask.sum()
+        w = w_ * mask[..., None] # (BS, N_raysamples)
+        loss = n[:,None,:] - n_pred # (BS, num_samples, 3)
+        loss = torch.norm(loss, dim=-1) # (BS, num_samples, 1)
+        loss = (loss**2)/2 # (BS, num_samples)
+        loss = torch.sum(w * loss, dim=1) # (BS) per ray loss
+        loss = torch.sum(loss)/valid_pixels # float, averaged by valid pixels
+    else:
+        loss = torch.mean(torch.sum(w_*0.5*torch.norm(n - n_pred, dim=-1)**2, dim=1))
     return loss
 
 loss_dict = {'mse': MSELoss}

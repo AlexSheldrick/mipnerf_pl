@@ -1,14 +1,14 @@
 seed: 4
 num_gpus: 1
 precision: 16
-accumulate_grad_batches: 1
-exp_name:  'lego-100' #'PROFILING-fused'
+accumulate_grad_batches: 1 #2
+exp_name:  'lego+URF-6' #'PROFILING-fused'
 data_path: '../data/lego-new-half/'
 out_dir: 'OUT/new'
 dataset_name: 'blender'
 train:
-  batch_size: 8192 #2048
-  num_images: 100 #reduce amount of train images. None means all images are used.
+  batch_size: 8192 #8192 #4096 #8192 #4096 #8192 #2048
+  num_images: 8 #reduce amount of train images. None means all images are used.
   batch_type: 'all_images'  # single_image: inputs a full image; all_images: inputs batch_size rays sampled from different image
   num_work: 4
   randomized: True
@@ -19,8 +19,8 @@ val:
   num_work: 0
   randomized: False
   white_bkgd: True
-  check_interval: 2500
-  chunk_size: 8192 #3072 #3072  # The amount of input rays in a forward propagation
+  check_interval: 500
+  chunk_size: 8192 #8192 #3072 #3072  # The amount of input rays in a forward propagation
   sample_num: 12  # Total number of images verified during once validation
 nerf:
   num_samples: 64  # The number of samples per level.
@@ -54,12 +54,13 @@ nerf:
     prop_mlp: True #If a proposal mlp (like in mipnerf 360) should suggest network weights or the 2-stage logic from mipnerf (false).
     num_glo_embeddings: 0 #Should be equal to number of pictures
     num_glo_features: 0 #Set to 0 do deactivate
+    mlp_normals: False #Have MLP predict normals
 optimizer:
-  lr_init: 2e-3  # The initial learning rate.
+  lr_init: 3e-3 #3e-3  # The initial learning rate.
   lr_final: 2e-5  # The final learning rate.
-  lr_delay_steps: 512  # The number of "warmup" learning steps.
+  lr_delay_steps: 512 #1500 #512 # The number of "warmup" learning steps.
   lr_delay_mult: 0.01  # How much sever the "warmup" should be.
-  max_steps: 150000 #000 #1000000
+  max_steps: 50000 #000 #1000000
 loss:
   disable_multiscale_loss: False
   coarse_loss_mult: 0.1
@@ -67,10 +68,11 @@ loss:
   lambda_orientation: 0.0
   lambda_distortion: 0.0 #0.0 #0.0 # 0.0 #1e-4
 
-  lambda_normal: 0.0 #8e-5 #0.02//0.05 // 0.001
-  lambda_near_loss: 0.0 #0.02
-  lambda_empty_loss: 0.0 #0.1
+  lambda_normal: 0.0 #0.0 #8e-5 #0.02//0.05 // 0.001
+  lambda_near_loss: 0.1 #0.02
+  lambda_empty_loss: 1.0 #0.1
 
   lambda_prop_loss: 1.0 #1.0 
 checkpoint:
   resume_path: None #/media/alex/SSD Datastorage/mipnerf_pl/OUT/new/ckpt/lego-100/last.ckpt #'/home/sheldrick/master/mipnerf_pl/OUT/ckpt/lego-120-D-Test/last.ckpt'
+  test: None #/home/sheldrick/master/mipnerf_pl/OUT/scannet/ckpt/scannet-710_0-view-4GLO_encode/last-v5.ckpt #None #/home/sheldrick/master/mipnerf_pl/OUT/scannet/ckpt/scannet-710_0-view-4GLO_encode/last-v4.ckpt

@@ -10,10 +10,14 @@ from collections import defaultdict, namedtuple
 import collections
 import numpy as np
 import math
+from torchvision.transforms.functional import equalize
+from PIL import Image
+from pathlib import Path
+
 
 from utils.lr_schedule import MipLRDecay
 from torch.utils.data import DataLoader
-from utils.vis import stack_rgb, visualize_depth, visualize_normal, l2_normalize, stack_imgs, to8b
+from utils.vis import visualize_depth, visualize_normal, l2_normalize, to8b
 
 Rays = collections.namedtuple(
     'Rays',
@@ -36,6 +40,7 @@ class MipNeRFSystem(LightningModule):
         self.val_chunk_size = hparams['val.chunk_size']
         self.batch_size = hparams['train.batch_size']
         self.compute_density_normals = hparams['nerf.compute_density_normals']
+        self.mlp_normals =  hparams['nerf.mlp.mlp_normals']
         self.loss = loss_dict['mse'](hparams)
         self.mip_nerf = MipNerf(
             num_samples=hparams['nerf.num_samples'],
@@ -67,6 +72,7 @@ class MipNeRFSystem(LightningModule):
             prop_mlp=hparams['nerf.mlp.prop_mlp'],
             num_glo_embeddings = hparams['nerf.mlp.num_glo_embeddings'],
             num_glo_features = hparams['nerf.mlp.num_glo_features'],
+            mlp_normals=hparams['nerf.mlp.mlp_normals'],
         )
         self.val_idx = 0
 
@@ -86,7 +92,7 @@ class MipNeRFSystem(LightningModule):
                                      num_images=self.hparams['train.num_images']
                                      )
         self.val_dataset = dataset(data_dir=self.hparams['data_path'],
-                                   split='test',
+                                   split='val',
                                    white_bkgd=self.hparams['val.white_bkgd'],
                                    batch_type=self.hparams['val.batch_type']
                                    )
@@ -133,13 +139,16 @@ class MipNeRFSystem(LightningModule):
                           persistent_workers=True)
                           
     def training_step(self, batch, batch_nb):
-        eps = max(0.33 - 0.5*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.1)
+        eps = max(0.45 - 0.4*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.15)
+        #eps = 0.1
         #if self.global_step < 8000:
         #eps = max(0.2 - 0.2*math.sqrt(4*self.global_step/(self.hparams['optimizer.max_steps'])), 0.04)
         #else:
         #    eps = max(0.09 - 0.07*3*(self.global_step-8000)/(self.hparams['optimizer.max_steps']) , 0.02)
         #0.17
+        #eps = 0.1
         #eps = 0.08 #, 0.12
+        #eps = 0.03
         rays, rgbs = batch
         ret = self(rays, self.train_randomized, self.white_bkgd, self.compute_density_normals, eps, zero_glo = False)
         targets = {'rgb': rgbs[..., :3], 'depth': rays.depth.view(-1), 'normal': rays.normal, 'dirs': rays.viewdirs, 'var':rays.depth_vars, 'dmask': rays.mask.view(-1)}
@@ -155,23 +164,27 @@ class MipNeRFSystem(LightningModule):
             targets = {'rgb': rgbs[..., :3].view(-1,3), 'depth': rays.depth.view(-1), 'normal': rays.normal.view(-1,3), 'dirs': rays.viewdirs.view(-1,3), 
                         'mask': ret['mask'], 'var':rays.depth_vars, 'dmask': rays.mask.view(-1)} #
             loss_dict = self.loss(ret, targets, mask=ret['mask'])
-            if batch_nb == self.val_idx:
+            if batch_nb == 4: #self.val_idx:
                 self.write_imgs_to_tensorboard(ret, rays, rgbs, 'val')
-                self.val_idx = torch.randint(low=0, high=self.val_dataset.n_examples, size=(1,))[0]
             return loss_dict
 
     def test_step(self, batch, batch_nb):
-        with torch.inference_mode(False): 
-            with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.amp):
-                rays, rgbs = batch
+        with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=self.amp):
+            rays, rgbs = batch
+            with torch.inference_mode(False):                
                 ret = self.render_image(batch, chunk_size=self.val_chunk_size)
-                targets = {'rgb': rgbs[..., :3].view(-1,3), 'depth': rays.depth.view(-1), 'normal': rays.normal.view(-1,3), 'dirs': rays.viewdirs.view(-1,3), 
-                            'mask': ret['mask'], 'var':rays.depth_vars, 'dmask': rays.mask.view(-1)} #
-                loss_dict = self.loss(ret, targets, mask=ret['mask'])
-                self.write_imgs_to_tensorboard(ret, rays, rgbs, 'test', '_img_'+str(batch_nb))
-                return loss_dict
+        make_img = lambda x: (torch.clamp(x, min=0, max=1) * 255).to(torch.uint8)
+        rgbs = equalize(make_img(rgbs[..., :3]))
+        ret['rgb_fine'] = make_img(equalize(ret['rgb_fine'].view(rgbs.shape)).view(-1,3))
+        targets = {'rgb': rgbs[..., :3].view(-1,3), 'depth': rays.depth.view(-1), 'normal': rays.normal.view(-1,3), 'dirs': rays.viewdirs.view(-1,3), 
+                        'mask': ret['mask'], 'var':rays.depth_vars, 'dmask': rays.mask.view(-1)} #
+
+        loss_dict = self.loss(ret, targets, mask=ret['mask'])
+        self.write_imgs_to_tensorboard(ret, rays, rgbs, 'test', '_img_'+str(batch_nb))
+        return loss_dict
 
     def validation_epoch_end(self, outputs):
+        self.val_idx = torch.randint(low=0, high=12, size=(1,))[0]
         self.mean_metrics(outputs, mode='val')
     
     def test_epoch_end(self, outputs):
@@ -257,7 +270,9 @@ class MipNeRFSystem(LightningModule):
             rgbs = rgbs[..., :3]
         elif mode=='train':
             N, H, W, C = (1, self.train_dataset.h, self.train_dataset.w, 3)
-            img_idx = np.random.choice(np.arange((self.train_dataset.n_examples)))
+            if self.train_dataset.n_examples < 3:
+                img_idx = np.random.choice(np.arange((self.train_dataset.n_examples)))
+            else: img_idx = 2 #starts from 0
             rays, rgbs = self.train_dataset[W*H*img_idx:W*H*(1+img_idx)]
             rays = [torch.from_numpy(getattr(rays, key)).to(self.device) for key in rays._fields]
             rays = Rays(*[rays_attr for rays_attr in rays])
@@ -286,10 +301,6 @@ class MipNeRFSystem(LightningModule):
         elif mode == 'train':
             return results, rays, rgbs #hacky way to do train rendering
 
-        
-         
-            
-
     def write_imgs_to_disk(self, results):
         depth_pred = results['depth']
         pass
@@ -303,18 +314,22 @@ class MipNeRFSystem(LightningModule):
         N, H, W, C = rgbs.shape  # N H W C
         #depth
         depth_pred = results['depth']
-        depth_pred = visualize_depth(depth_pred.view(1, H, W), masked=True) # H W
-        depth_gt = visualize_depth(rays.depth.view(H,W), masked=True)
+        depth_pred = visualize_depth(depth_pred.view(1, H, W)) # H W
+        depth_gt = visualize_depth(rays.depth.view(H,W))
 
         #normals
         #depth_mask = (rays.depth < 0.1).view(-1) # (H*W)
-        normals_pred = results['normal']        #(H*W,3)
+        #normals_pred = results['normal']        #(H*W,3)
         normals_gt = rays.normal.view(H, W, 3)#.permute(2, 0, 1).cpu() # (3, H, W)
         normals_gt = visualize_normal(normals_gt) 
         #weight_mask = (torch.cumsum(results['weights'], dim = -1) < 0.75).to(results['weights'].dtype).unsqueeze(-1)
         mask = (~torch.any(rays.normal, dim=-1)) #(1,H,W)
         mask = mask.view(H*W) #(H,W)
-        normals_pred = torch.sum(results['weights'][...,None]*results['normal'], dim=1) # (H*W, N_samples + Samples_fine (128), 3) --> (H*W, 3)
+        if not self.mlp_normals:
+            normals_pred = torch.sum(results['weights'][...,None]*results['density_normals'], dim=1) # (H*W, N_samples + Samples_fine (128), 3) --> (H*W, 3)
+        else:
+            normals_pred = torch.sum(results['weights'][...,None]*results['mlp_normals'], dim=1) # (H*W, N_samples + Samples_fine (128), 3) --> (H*W, 3)
+        
         normals_pred = l2_normalize(normals_pred)
         #normals_pred[depth_mask,...] = 0
         normals_pred[mask, ...] = 0
@@ -333,3 +348,10 @@ class MipNeRFSystem(LightningModule):
         canvas[:, H:2*H, W:2*W] = depth_pred
         canvas[:, H:2*H, 2*W:3*W] = normals_pred.squeeze(0).permute(2, 0, 1).cpu()
         self.logger.experiment.add_image(f'{mode}/GT_pred{batch_nb}', canvas, self.global_step)
+        
+        im = Image.fromarray((canvas.transpose(1,2,0)*255).astype(np.uint8))
+        out_path = Path(self.hparams['out_dir'], 'images')
+        out_path.mkdir(exist_ok=True)
+        out_path = Path(out_path, self.hparams['exp_name'])
+        out_path.mkdir(exist_ok=True)
+        im.save(str(out_path) + f"/{mode}_{self.global_step}.jpeg")

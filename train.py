@@ -19,7 +19,7 @@ parser = argparse.ArgumentParser()
 #parser.add_argument("--dataset_name", help="Single or multi data.", type=str, choices=['multi_blender', 'blender'],
 #                    required=True)
 #parser.add_argument("--config", help="Path to config file.", required=False, default='./configs/lego.yaml')
-parser.add_argument("--config", help="Path to config file.", required=False, default='./configs/scannet.yaml')
+parser.add_argument("--config", help="Path to config file.", required=False, default='./configs/lego.yaml')
 parser.add_argument("opts", nargs=argparse.REMAINDER,
                     help="Modify hparams. Example: train.py resume out_dir TRAIN.BATCH_SIZE 2")
 

@@ -1,13 +1,13 @@
 import torch
 from torch import nn
 from einops import repeat
-from models.mip import sample_along_rays, integrated_pos_enc, pos_enc, volumetric_rendering, resample_along_rays, max_dilate_weights
+from models.mip import sample_along_rays, integrated_pos_enc, pos_enc, volumetric_rendering, resample_along_rays #, max_dilate_weights
 from collections import namedtuple
 from utils.vis import l2_normalize
 import math
-from models.ref_utils import generate_ide_fn
-from models.mipnerf360_utils import track_linearize, contract, inv_contract, lift_and_diagonalize, generate_basis
-import functorch
+#from models.ref_utils import generate_ide_fn
+#from models.mipnerf360_utils import track_linearize, contract, inv_contract, lift_and_diagonalize, generate_basis
+from functorch import make_functional_with_buffers, vmap, grad
 
 
 def _xavier_init(linear):
@@ -24,7 +24,7 @@ class MLP(torch.nn.Module):
 
     def __init__(self, net_depth: int, net_width: int, net_depth_condition: int, net_width_condition: int,
                  skip_index: int, num_rgb_channels: int, num_density_channels: int, activation: str,
-                 xyz_dim: int, view_dim: int, prop_mlp: bool = False):
+                 xyz_dim: int, view_dim: int, prop_mlp: bool = False, mlp_normals=False):
         """
           net_depth: The depth of the first part of MLP.
           net_width: The width of the first part of MLP.
@@ -59,8 +59,12 @@ class MLP(torch.nn.Module):
         del layers
         self.density_layer = torch.nn.Linear(net_width, num_density_channels)
         _xavier_init(self.density_layer)
-        
+        self.mlp_normals = False
         if not prop_mlp:
+            if mlp_normals:
+                self.mlp_normals = True
+                self.normals_layer = torch.nn.Linear(net_width, 3)
+
             self.extra_layer = torch.nn.Linear(net_width, net_width)  # extra_layer is not the same as NeRF
             _xavier_init(self.extra_layer)
             layers = []
@@ -108,7 +112,9 @@ class MLP(torch.nn.Module):
                 x = torch.cat([x, inputs], dim=-1)
         
         raw_density = self.density_layer(x)
-        
+        if self.mlp_normals:
+            normals = self.normals_layer(x)
+            normals = -l2_normalize(normals) 
         if (view_direction is not None) or (glo_vec is not None):
             # Output of the first part of MLP.
             x = self.extra_layer(x)
@@ -133,6 +139,8 @@ class MLP(torch.nn.Module):
 
         if not self.prop_mlp:
             raw_rgb = self.color_layer(x)
+            if self.mlp_normals:
+                return raw_rgb, raw_density, normals
             return raw_rgb, raw_density
         
         else:
@@ -171,7 +179,8 @@ class MipNerf(torch.nn.Module):
                  mlp_net_activation: str = 'relu',
                  prop_mlp: bool = False,
                  num_glo_embeddings = 18,
-                 num_glo_features = 4):
+                 num_glo_features = 4,
+                 mlp_normals = True):
         super(MipNerf, self).__init__()
         self.num_levels = num_levels  # The number of sampling levels.
         self.num_samples = num_samples  # The number of samples per level.
@@ -191,11 +200,10 @@ class MipNerf(torch.nn.Module):
         mlp_view_dim = deg_view * 3 * 2 + num_glo_features
         mlp_view_dim = mlp_view_dim + 3 if append_identity else mlp_view_dim
         if not self.use_viewdirs: mlp_view_dim = 0 + num_glo_features
-        self.encode_glo = True
-        if self.encode_glo: mlp_view_dim = num_glo_features * 4 * 2 + mlp_view_dim
+        self.mlp_normals = mlp_normals
         self.mlp = MLP(mlp_net_depth, mlp_net_width, mlp_net_depth_condition, mlp_net_width_condition,
                        mlp_skip_index, mlp_num_rgb_channels, mlp_num_density_channels, mlp_net_activation,
-                       mlp_xyz_dim, mlp_view_dim, prop_mlp=False)
+                       mlp_xyz_dim, mlp_view_dim, prop_mlp=False, mlp_normals=self.mlp_normals)
         if prop_mlp:
             self.prop_mlp = MLP(4, 256, mlp_net_depth_condition, mlp_net_width_condition,
                        8, mlp_num_rgb_channels, mlp_num_density_channels, mlp_net_activation,
@@ -227,6 +235,7 @@ class MipNerf(torch.nn.Module):
         if self.num_glo_features > 0: # Construct/grab GLO vectors for the cameras of each input ray.
             self.glo_vecs = torch.nn.Embedding(self.num_glo_embeddings, self.num_glo_features)
         
+        #
         #self.pos_basis_t = torch.from_numpy(generate_basis('icosahedron', 2)).to(torch.float16).to(device='cuda:0') # self.basis_shape : 'icosahedron'  // self.basis_subdivisions : 2
 
     def forward(self, rays: namedtuple, randomized: bool, white_bkgd: bool, compute_normals: bool = False, eps = 1.0, zero_glo: bool = True):
@@ -369,12 +378,16 @@ class MipNerf(torch.nn.Module):
                 else: viewdirs_enc = None
                     
                 if not self.prop_mlp or (i_level == (self.num_levels - 1)):
+                    if self.mlp_normals: raw_rgb, raw_density, mlp_normals = self.mlp(samples_enc, viewdirs_enc, glo_vec = glo_vec)
                     raw_rgb, raw_density = self.mlp(samples_enc, viewdirs_enc, glo_vec = glo_vec)
                 else:
                     raw_density = self.prop_mlp(samples_enc, view_direction=None, glo_vec = None)
             
+            #fetch normals if compute_normals & we're in the nerf MLP
             elif compute_normals and (i_level == (self.num_levels - 1)):
-                raw_rgb, raw_density, normals = self.gradient(means_covs, rays.viewdirs, glo_vec)
+                if self.mlp_normals: raw_rgb, raw_density, mlp_normals, density_normals = self.gradient(means_covs, rays.viewdirs, glo_vec)
+                else: raw_rgb, raw_density, density_normals = self.gradient(means_covs, rays.viewdirs, glo_vec)
+                #raw_rgb, raw_density, normals = self.chunked_gradient(means_covs, rays.viewdirs, glo_vec, 4096)
 
             # Add noise to regularize the density predictions if needed.
             if randomized and (self.density_noise > 0):
@@ -411,7 +424,8 @@ class MipNerf(torch.nn.Module):
                 t_env[i_level] = t_samples.clone()
             
 
-        if not compute_normals: normals = torch.zeros((batch_size, n_samples, 3), device=rays[0].device)
+        if not compute_normals: density_normals = torch.zeros((batch_size, n_samples, 3), device=rays[0].device)
+        if not self.mlp_normals : mlp_normals = torch.zeros((batch_size, n_samples, 3), device=rays[0].device)
         if not self.depth_sampling: s = torch.as_tensor([eps] , device=rays[0].device)
         if self.prop_mlp: 
             envelope_loss = lossfun_outer(t_samples.detach(), weights.detach(), t_env[0], w_env[0])
@@ -422,9 +436,9 @@ class MipNerf(torch.nn.Module):
         #if self.prop_mlp: envelope_loss = lossfun_outer(t_samples, weights, t_env, w_env)
 
         empty_loss, near_loss = lossfun_depth_weight_CDF(rays, t_samples, weights, eps)
-        #empty_loss_uncertain, near_loss_uncertain =  lossfun_depth_weight_CDF(rays, t_samples, weights, eps, uncertain=True)
+        #empty_loss, near_loss = lossfun_depth_weight(rays, t_samples, weights, eps)
+        
         #empty_loss_coarse, near_loss_coarse = lossfun_depth_weight_CDF(rays, t_env, w_env, eps)
-        #empty_loss_coarse_uncertain, near_loss_coarse_uncertain =  lossfun_depth_weight_CDF(rays, t_samples, weights, eps, uncertain=True)
         empty_loss = empty_loss #+  empty_loss_coarse #+ empty_loss_coarse_uncertain
         near_loss = near_loss #+  near_loss_coarse #+ near_loss_coarse_uncertain
         
@@ -434,12 +448,14 @@ class MipNerf(torch.nn.Module):
         
         #empty_loss, near_loss, normal_weights = lossfun_depth_weight(rays, t_samples, weights, eps)
         #empty_loss, near_loss, normal_weights = lossfun_depth_weight_alex(rays, t_samples, weights, eps, densities=density)
-        out = {'rgb_coarse': ret[-2], 'rgb_fine': ret[-1], 'depth': depth, 'normal': normals, 'weights': weights, 's': s, 
-                            'distortion': lossfun_distortion(t_samples, weights), 'near_loss': near_loss, 'empty_loss': empty_loss,
-                            'normal_lowerbound_error': normal_lowerbound_error, 
-                            'envelope_loss': envelope_loss
-                            #'expected_depth': expected_depth, 'ray_termination':ray_termination
-                            }
+        out = {'rgb_coarse': ret[-2], 'rgb_fine': ret[-1], 'depth': depth, 
+                'density_normals': density_normals, 
+                'mlp_normals': mlp_normals,
+                'weights': weights, 's': s, 
+                'distortion': lossfun_distortion(t_samples, weights), 'near_loss': near_loss, 'empty_loss': empty_loss,
+                'normal_lowerbound_error': normal_lowerbound_error, 
+                'envelope_loss': envelope_loss
+                }
         return out
 
     def gradient(self, means_covs, viewdirs, glo_vec):
@@ -460,40 +476,64 @@ class MipNerf(torch.nn.Module):
                     self.min_deg_point,
                     self.max_deg_point,
                 )  
-            raw_rgb, raw_density = self.mlp(samples_enc, view_direction = view_direction_encoded, glo_vec=glo_vec)
+            if self.mlp_normals: raw_rgb, raw_density, normals_mlp = self.mlp(samples_enc, view_direction_encoded, glo_vec = glo_vec)
+            else: raw_rgb, raw_density = self.mlp(samples_enc, view_direction = view_direction_encoded, glo_vec=glo_vec)
+            #raw_rgb, raw_density = self.mlp(samples_enc)
+            
             d_output = torch.ones_like(raw_density, requires_grad=GraphBools, device=raw_density.device)
-            normals = torch.autograd.grad(
+            normals_density = torch.autograd.grad(
                 outputs=raw_density,
                 inputs=means_covs,
                 grad_outputs=d_output,
                 create_graph=GraphBools,
                 retain_graph=GraphBools,
                 only_inputs=True)[0]
-            normals = -l2_normalize(torch.nan_to_num(normals)) 
-        return raw_rgb, raw_density, normals
+            normals_density = -l2_normalize(torch.nan_to_num(normals_density)) 
+        if self.mlp_normals: return raw_rgb, raw_density, normals_mlp, normals_density
+        return raw_rgb, raw_density, normals_density
     
-    def gradient_(self, means_covs, viewdirs):
-        means_covs[0].requires_grad_()
-        means_covs[1].requires_grad_()      
-        #with torch.enable_grad():
-        means = means_covs[0]
-        covs = means_covs[1]
-        means_flat = means.reshape((-1, means.shape[-1]))
-        covs_flat = covs.reshape((-1,) + covs.shape[len(means.shape) - 1:])
+    def predict_densitystateless_model(self, means, covs):
+        means_covs_ = (means, covs)
+        samples_enc = integrated_pos_enc(
+            means_covs_,
+            self.min_deg_point,
+            self.max_deg_point,
+        )  
+        raw_density = self.mlp_func(self.mlp.parameters(), self.mlp.buffers(), samples_enc)
+        return raw_density.squeeze(), samples_enc
 
-        predict_density_and_grad_fn = functorch.vmap(
-            functorch.grad_and_value(self.predict_density, has_aux=True), in_dims=(0, 0))
-        raw_grad_density_flat, (raw_density_flat, x_flat) = (
-            predict_density_and_grad_fn(means_flat, covs_flat))
-            
-        # Unflatten the output.
-        raw_density = raw_density_flat.reshape(means.shape[:-1]).unsqueeze(-1)            
-        x = x_flat.reshape(means.shape[:-1] + (x_flat.shape[-1],))
-        normals = raw_grad_density_flat.reshape(means.shape)
-        raw_rgb = self.make_color(x, viewdirs)
+    def gradient_func(self, means_covs, viewdirs, glo_vec):
+        with torch.enable_grad():
+            #(means, covs) -> ((BS, N_samples, 3), (BS, N_samples, 3, 3))
+            means = means_covs[0]#.clone().detach() 
+            means.requires_grad_() #Shape: 
+            covs = means_covs[1]#.clone().detach()
+            covs.requires_grad_()
+            means_flat = means.reshape((-1, means.shape[-1]))
+            covs_flat = covs.reshape((-1,) + covs.shape[len(means.shape) - 1:])
+                          
+            compute_grad, samples_enc = grad(self.predict_densitystateless_model, has_aux=True)
+            compute_normals = vmap(compute_grad, in_dims=(0,0))
+            normals = compute_normals(means_flat, covs_flat)
         
-        normals = -l2_normalize(torch.nan_to_num(normals)) 
+        # NORMALLY: samples_enc: [B*N, 2*3*L]  L:(max_deg_point - min_deg_point)
+        # Here: samples_enc: [B*N, 2*3*L]  L:(max_deg_point - min_deg_point)
+        samples_enc[0].requires_grad_(requires_grad=False)
+        samples_enc[0] = samples_enc[0].reshape(means.shape[:-1] + (samples_enc[0].shape[-1],))
+        samples_enc[1].requires_grad_(requires_grad=False)
+        samples_enc[1] = samples_enc[1].reshape(means.shape[:-1] + (samples_enc[1].shape[-1],))
+        if self.use_viewdirs:
+            view_direction_encoded = pos_enc(
+                        viewdirs,
+                        min_deg=0,
+                        max_deg=self.deg_view,
+                        append_identity=True,
+                    )
+        else: view_direction_encoded = None
 
+        raw_rgb, raw_density = self.mlp(samples_enc, view_direction = view_direction_encoded, glo_vec=glo_vec)
+        normals = normals.reshape(means.shape)
+        normals = -l2_normalize(torch.nan_to_num(normals)) 
         return raw_rgb, raw_density, normals
 
     def predict_density(self, means, covs):
@@ -525,6 +565,21 @@ class MipNerf(torch.nn.Module):
         x = self.mlp.view_layers(x)                
         raw_rgb = self.mlp.color_layer(x)
         return raw_rgb
+
+    def chunked_gradient(self, means_covs, viewdirs, glo_vec, chunksize = 4096):
+        B = means_covs[0].shape[0]
+        out_chunks = []
+        for i in range(0, B, chunksize):
+            means_covs_ = (means_covs[0][i:i+chunksize]).contiguous(), (means_covs[1][i:i+chunksize]).contiguous()
+            if viewdirs is not None: viewdirs_ = viewdirs[i:i+chunksize].contiguous()
+            else: viewdirs_ = None
+            if glo_vec is not None: glo_vec_ = glo_vec[i:i+chunksize].contiguous()
+            else: glo_vec_ = None
+            #raw_rgb, raw_density, normals = self.gradient(means_covs, viewdirs, glo_vec)
+            out_chunks += [self.gradient(means_covs_, viewdirs_, glo_vec_)]    
+        raw_rgb, raw_density, normals = zip(*out_chunks)
+        raw_rgb, raw_density, normals = torch.cat(raw_rgb, 0), torch.cat(raw_density, 0), torch.cat(normals, 0)
+        return raw_rgb, raw_density, normals
 
     def chunked_inference(self, i_level, rays, means_covs, chunksize=2048, compute_normals: bool = False):
         B = means_covs[0].shape[0]
@@ -584,54 +639,44 @@ def lossfun_depth_weight(rays: namedtuple, tvals_, w, eps):
     """Penalize sum of weights for empty interval
        Penalize squared distance from depth for near inteval"""
     depth = rays.depth    
-    tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:]) #* torch.linalg.norm(torch.unsqueeze(rays.directions, dim=-2), dim=-1)
-    # models/mip.py:8 here sample point by multiply the interval with the direction without normalized, so
-    # the delta is norm(t1*d-t2*d) = (t1-t2)*norm(d)
+    tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:])
 
     dummy_1 = torch.as_tensor([1.0], device = depth.device)
     
-    depth_t = depth.broadcast_to(tvals.shape)
+    #depth_t = depth.broadcast_to(tvals.shape)
+    #eps = eps * 3
     sigma = (eps / 3.) ** 2
     mask_near = ((tvals > (depth - eps)) & (tvals < (depth + eps))).to(depth.dtype).reshape(tvals.shape[0], -1)
     mask_empty = (tvals < (depth - eps)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    dist = mask_near * (tvals - depth_t)
+    dist = mask_near * (tvals - depth)
     dist = torch.nan_to_num(1.0 / (sigma * math.sqrt(2 * math.pi)) * torch.exp(-(dist ** 2 / (2 * sigma ** 2 + 1e-6))))
     dist = (dist/ dist.max()) * mask_near
     near_losses =  (((mask_near * w - dist) ** 2).sum() / torch.maximum(mask_near.sum(), dummy_1))
     empty_losses =  (((mask_empty * w) ** 2).sum() / torch.maximum(mask_empty.sum(), dummy_1))
+    return empty_losses, near_losses
 
-    normal_weights = ((mask_near * w )) #make distribution over nonzero/nonmasked weights
-    return empty_losses, near_losses, normal_weights
-
-def lossfun_depth_weight_alex(rays: namedtuple, tvals_, w, eps, densities):
+def lossfun_depth_weight_alex(rays: namedtuple, tvals_, w, eps):
     """Penalize sum of weights for empty interval
        Penalize squared distance from depth for near inteval"""
     depth = rays.depth    
     tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:]) #* torch.linalg.norm(torch.unsqueeze(rays.directions, dim=-2), dim=-1)
-    # models/mip.py:8 here sample point by multiply the interval with the direction without normalized, so
-    # the delta is norm(t1*d-t2*d) = (t1-t2)*norm(d)
-
     dummy_1 = torch.as_tensor([1.0], device = depth.device)
     
-    depth_t = depth.broadcast_to(tvals.shape)
+    #depth_t = depth.broadcast_to(tvals.shape)
     sigma = (eps / 3.) ** 2
     mask_near = ((tvals > (depth - eps)) & (tvals < (depth + eps))).to(depth.dtype).reshape(tvals.shape[0], -1)
     mask_empty = (tvals < (depth - eps)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    dist = mask_near * (tvals - depth_t)
+    dist = mask_near * (tvals - depth)
     dist = torch.nan_to_num(1.0 / (sigma * math.sqrt(2 * math.pi)) * torch.exp(-(dist ** 2 / (2 * sigma ** 2 + 1e-6))))
     dist = (dist/ dist.max()) * mask_near #(BS, N_samples)
-    #near_losses =  (((mask_near * w - dist) ** 2).sum() / torch.maximum(mask_near.sum(), dummy_1))
-    #normalize sigma
-    densities_normalized = nn.functional.softmax(densities.squeeze()) #BS, N_samples, 1
-    near_losses = (densities_normalized - dist) /  torch.maximum(mask_near.sum(), dummy_1)
-    near_losses = torch.maximum(mask_near*near_losses, torch.zeros_like(near_losses))
+    near_losses =  (((mask_near * w - dist) ** 2).sum() / torch.maximum(mask_near.sum(), dummy_1))
     near_losses = (near_losses**2)
     empty_losses =  (((mask_empty * w) ** 2).sum() / torch.maximum(mask_empty.sum(), dummy_1))
 
     normal_weights = ((mask_near * w )) #make distribution over nonzero/nonmasked weights
     return empty_losses, near_losses, normal_weights
 
-def lossfun_depth_weight_CDF(rays: namedtuple, tvals_, w, eps, uncertain = False):
+def lossfun_depth_weight_CDF(rays: namedtuple, tvals_, w, eps, uncertain = False, beta = 0.):
     """Penalize sum of weights for empty interval
        Penalize squared distance from depth for near inteval"""
     depth = rays.depth #.clone().detach()    
@@ -649,28 +694,27 @@ def lossfun_depth_weight_CDF(rays: namedtuple, tvals_, w, eps, uncertain = False
 
     tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:])
     dummy_1 = torch.as_tensor([1.0], device = depth.device)
-    sigma = (eps / 1.)
-    
-    #beta = 0.01 * torch.ones_like(rays.depth_vars)
-    #beta[rays.depth_vars > 0.01] = rays.depth_vars[rays.depth_vars > 0.01]
-    beta = rays.depth_vars
-    #beta = 0.02
-    #beta = 0.
+    sigma = 0.03   
+    #beta = 2*sigma
 
-    mask_near_close = (((tvals) > (depth  - 3*sigma - beta)) & (tvals  < (depth - beta)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    mask_near_far = ((tvals  > (depth + beta)) & ((tvals) < (depth  + 3*sigma + beta)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    mask_empty = (((tvals) < (depth - 3*sigma - beta)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    alpha = 0.
-    
+    mask_near_close = (((tvals) > (depth  - 3*sigma)) & (tvals  < (depth)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
+    mask_near_far = ((tvals  > (depth)) & ((tvals) < (depth  + 3*sigma)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
+    mask_empty = (((tvals) < (depth - 3*sigma)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
+    alpha = 0. #alpha, tolerance parameter, relates to depth uncertainty
+    opacity = 1.0 #w.sum(dim=-1).unsqueeze(1) 
     #w shape: BS, N_samples
-    m_1 = torch.distributions.normal.Normal(loc = depth - beta, scale = sigma) 
-    m_2 = torch.distributions.normal.Normal(loc = depth + beta, scale = sigma) 
 
-    opacity = 1.0 #w.sum(dim=-1).unsqueeze(1)
-    cdf_values_1 = opacity * m_1.cdf(tvals) # BS, N_samples
-    cdf_values_2 = opacity * m_2.cdf(tvals) # BS, N_samples
     w_cumsum = torch.cumsum(w, dim=-1) # BS, N_samples
-    #alpha, tolerance parameter, relates to depth uncertainty
+    # Construct $\Phi$ and evaluate on t_i's
+    m_1 = torch.distributions.normal.Normal(loc = depth - beta, scale = sigma)
+    cdf_values_1 = opacity * m_1.cdf(tvals) # BS, N_samples
+    
+    if beta > 0: 
+        m_2 = torch.distributions.normal.Normal(loc = depth + beta, scale = sigma)
+        cdf_values_2 = opacity * m_2.cdf(tvals) # BS, N_samples     
+    else: 
+        m_2 = m_1
+        cdf_values_2 = cdf_values_1
     
     #Before Depth we are upper bounded by the CDF
     near_close_losses = (w_cumsum - cdf_values_1 * opacity - alpha)
@@ -685,6 +729,46 @@ def lossfun_depth_weight_CDF(rays: namedtuple, tvals_, w, eps, uncertain = False
     near_losses = (near_close_losses + near_far_losses)
     empty_losses =  (((mask_empty * w)**2).sum() / torch.maximum(mask_empty.sum(), dummy_1)) 
     return empty_losses, near_losses
+
+def lossfun_depth_weight_CDF_test(rays: namedtuple, tvals_, w, eps, uncertain = False):
+    """Penalize sum of weights for empty interval
+       Penalize squared distance from depth for near inteval"""
+    depth = rays.depth 
+    tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:])
+    dummy_1 = torch.as_tensor([1.0], device = depth.device)
+
+    #sigma = (rays.depth_vars)
+    sigma = 0.03
+    #beta = sigma * 3
+    beta = 0.
+    #beta = sigma
+
+    # & (depth > 0) to ignore invalid depth points
+    mask_near = ((tvals  < (depth)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
+    mask_far = ((tvals  > (depth)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
+
+    #w shape: BS, N_samples
+    m_1 = torch.distributions.normal.Normal(loc = depth - beta, scale = sigma) 
+    m_2 = torch.distributions.normal.Normal(loc = depth + beta, scale = sigma) 
+
+    opacity = 1.0 #w.sum(dim=-1).unsqueeze(1) # (unused)
+    alpha = 0.#tolerance parameter, additional depth uncertainty parameter (unused)
+    cdf_values_1 = opacity * m_1.cdf(tvals - beta) # BS, N_samples
+    cdf_values_2 = opacity * m_2.cdf(tvals + beta) # BS, N_samples
+    w_cumsum = torch.cumsum(w, dim=-1) # BS, N_samples    
+    
+    #Before Depth we are upper bounded by the CDF
+    near_losses = (w_cumsum - cdf_values_1 * opacity - alpha)
+    near_losses = torch.maximum(mask_near*near_losses, torch.zeros_like(near_losses))
+
+    #After Depth we are lower bounded by the CDF
+    far_losses = (cdf_values_2 * opacity - w_cumsum - alpha) 
+    far_losses = torch.maximum(mask_far*far_losses, torch.zeros_like(far_losses))
+
+    bound_losses = ((near_losses**2).sum() + (far_losses**2).sum())  #(rays.depth.shape[0])
+    bound_losses = bound_losses / torch.maximum(mask_far.sum() + mask_near.sum(), dummy_1)
+    empty_losses =  torch.zeros_like(bound_losses)
+    return empty_losses, bound_losses
 
 def normal_loss_lowerbound(rays: namedtuple, tvals_, w, eps, n_pred):
     depth = rays.depth  
