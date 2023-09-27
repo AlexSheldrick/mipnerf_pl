@@ -12,10 +12,10 @@ The following Mipnerf360 techniques have been ported to this fork:
 A room sized scene takes about 30 minutes to train and consistently outperforms related works, namely the standard L2 depth-loss, and loss formulations from Urban Radiance Fields [URF](https://urban-radiance-fields.github.io/) and Depth-Supervised Nerf [DS-NeRF](https://github.com/dunbar12138/DSNeRF).
 
 Comparison to baseline without depth readings:
-<video src='/media/comparison_compr.mp4' autoplay loop width=600> </video> <br/>
+<video src='media/comparison_compr.mp4' autoplay loop width=600> </video> <br/>
 
 Lego truck from just three views:
-<video src='/media/lego_3_cdf.mp4' autoplay loop width=600> </video> <br/>
+<video src='media/lego_3_cdf.mp4' autoplay loop width=600> </video> <br/>
 
 FAQ for dataset and installation to be added soon.
 
