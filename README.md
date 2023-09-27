@@ -1,5 +1,5 @@
 # Probabilistically Bounded Ray Densities
-This project is a fork of mipnerf_pl. This fork extends the logic of [Mip-NeRF](https://jonbarron.info/mipnerf/) contributions for depth supervision and novel techniques from [Mip-NeRF360]([https://jonbarron.info/mipnerf/](https://github.com/google-research/multinerf)), which are ported from JAX to PyTorch with Lightning.
+This project is a fork of mipnerf_pl. This fork extends the logic of [Mip-NeRF](https://jonbarron.info/mipnerf/) contributions for depth supervision and novel techniques from [Mip-NeRF360](https://github.com/google-research/multinerf), which are ported from JAX to PyTorch with Lightning.
 
 The theoretical contributions of the work are compactly derived here [Method](https://github.com/AlexSheldrick/mipnerf_pl/blob/depth-mipnerf/media/Method_SWB.pdf).
 
@@ -9,7 +9,7 @@ The following Mipnerf360 techniques have been ported to this fork:
 - Images illumination of outputs are conditioned on per camera embeddings to account for change in per-image light conditions and motion blur.
 - Network accepts real world RGB-D sensor readings (e.g. partially complete), or monocular depth prediction network outputs (e.g. Omnidata), or a composite.
 
-A room sized scene takes about 30 minutes to train and consistently outperforms related works, namely the depth loss from Urban Radiance Fields [URF](https://urban-radiance-fields.github.io/), Depth-Supervised Nerf [DS-NeRF](https://github.com/dunbar12138/DSNeRF) and the standard L2 loss.
+A room sized scene takes about 30 minutes to train and consistently outperforms related works, namely the standard L2 depth-loss, and loss formulations from Urban Radiance Fields [URF](https://urban-radiance-fields.github.io/) and Depth-Supervised Nerf [DS-NeRF](https://github.com/dunbar12138/DSNeRF).
 
 Comparison to baseline without depth readings:
 <video src='/media/comparison_compr.mp4' autoplay loop width=600> </video> <br/>
