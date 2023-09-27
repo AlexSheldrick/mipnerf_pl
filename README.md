@@ -1,9 +1,10 @@
 # Probabilistically Bounded Ray Densities
-<video src='https://www.alex-sheldrick.com/files/comparison_compr.mp4' autoplay loop width=600> </video> <br/>
 
-The above scene has been reconstructed from 18 images.
+This scene has been reconstructed from 18 images.
 
-This project is a fork of mipnerf_pl. This fork extends the logic of [Mip-NeRF](https://jonbarron.info/mipnerf/) contributions for depth supervision and novel techniques from [Mip-NeRF360](https://github.com/google-research/multinerf), which are ported from JAX to PyTorch with Lightning.
+[<img src="https://img.youtube.com/vi/I6OZBfNoHKE/sddefault.jpg" width="50%">](https://youtu.be/I6OZBfNoHKE "Ours vs No-Depth")
+
+This project is a fork of [mipnerf_pl](https://github.com/hjxwhy/mipnerf_pl) which served as a fantastic platform for iterating on NeRF ideas. This fork extends the logic of [Mip-NeRF](https://jonbarron.info/mipnerf/) contributions for depth supervision and novel techniques from [Mip-NeRF360](https://github.com/google-research/multinerf), which are ported from JAX to PyTorch with Lightning.
 
 The theoretical contributions of the work are compactly derived here [Method](https://github.com/AlexSheldrick/mipnerf_pl/blob/depth-mipnerf/media/Method_SWB.pdf).
 
