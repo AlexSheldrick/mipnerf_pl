@@ -38,13 +38,13 @@ Quantitatively we found the following:
     </thead>
     <tbody>
         <tr>
-            <td style="font-weight: bold;">Mip-NeRF</td>
+            <td style="font-weight: bold;">Ours w/o Depth</td>
             <td style="text-align: center;">17.73</td>
             <td style="text-align: center;">23.87</td>
             <td style="text-align: center;">36.65</td>
         </tr>
         <tr>
-            <td>Rendered</td>
+            <td>Rendered L2 Depth</td>
             <td style="text-align: center;">20.32</td>
             <td style="text-align: center;">25.90</td>
             <td style="text-align: center;">35.09</td>
