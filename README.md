@@ -5,7 +5,7 @@ The theoretical contributions of the work are compactly derived here [Method](ht
 
 The following Mipnerf360 techniques have been ported to this fork:
 - Proposal network with 4 layers and 256 hidden units, replacing the coarse & fine stages of sampling.
-- Log linearly annealed learning rate (2e to 2e<sup>-5</sup>) with 512 warmup steps.
+- Log linearly annealed learning rate (2e<sup>-3</sup> to 2e<sup>-5</sup>) with 512 warmup steps.
 - Images illumination of outputs are conditioned on per camera embeddings to account for change in per-image light conditions and motion blur.
 - Network accepts real world RGB-D sensor readings (e.g. partially complete), or monocular depth prediction network outputs (e.g. Omnidata), or a composite.
 
