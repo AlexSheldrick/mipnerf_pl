@@ -1,4 +1,8 @@
 # Probabilistically Bounded Ray Densities
+<video src='https://www.alex-sheldrick.com/files/comparison_compr.mp4' autoplay loop width=600> </video> <br/>
+
+The above scene has been reconstructed from 18 images.
+
 This project is a fork of mipnerf_pl. This fork extends the logic of [Mip-NeRF](https://jonbarron.info/mipnerf/) contributions for depth supervision and novel techniques from [Mip-NeRF360](https://github.com/google-research/multinerf), which are ported from JAX to PyTorch with Lightning.
 
 The theoretical contributions of the work are compactly derived here [Method](https://github.com/AlexSheldrick/mipnerf_pl/blob/depth-mipnerf/media/Method_SWB.pdf).
@@ -11,11 +15,9 @@ The following Mipnerf360 techniques have been ported to this fork:
 
 A room sized scene takes about 30 minutes to train and consistently outperforms related works, namely the standard L2 depth-loss, and loss formulations from Urban Radiance Fields [URF](https://urban-radiance-fields.github.io/) and Depth-Supervised Nerf [DS-NeRF](https://github.com/dunbar12138/DSNeRF).
 
-Comparison to baseline without depth readings:
-<video src='media/comparison_compr.mp4' autoplay loop width=600> </video> <br/>
 
 Lego truck from just three views:
-<video src='media/lego_3_cdf.mp4' autoplay loop width=600> </video> <br/>
+<video src='media/lego_3_cdf.mp4' autoplay loop width=600> </video>
 
 FAQ for dataset and installation to be added soon.
 
