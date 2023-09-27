@@ -18,7 +18,8 @@ A room sized scene takes about 30 minutes to train and consistently outperforms 
 
 
 Lego truck from just three views:
-<video src='media/lego_3_cdf.mp4' autoplay loop width=600> </video>
+
+https://github.com/AlexSheldrick/mipnerf_pl/assets/59337109/0d9e2bc7-2840-4a53-8ab7-7a1406faf748
 
 FAQ for dataset and installation to be added soon.
 
