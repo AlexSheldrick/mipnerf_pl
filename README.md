@@ -11,7 +11,7 @@ The theoretical contributions of the work are compactly derived here [Method](ht
 The following Mipnerf360 techniques have been ported to this fork:
 - Proposal network with 4 layers and 256 hidden units, replacing the coarse & fine stages of sampling.
 - Log linearly annealed learning rate (2e<sup>-3</sup> to 2e<sup>-5</sup>) with 512 warmup steps.
-- Outputs Pixels are conditioned on per camera embeddings to account for change in per-image light conditions and motion blur.
+- Output pixels are conditioned on per camera embeddings to account for changes in per-image lighting conditions and motion blur (Global latent optimization).
 - Network accepts real world RGB-D sensor readings (e.g. partially complete), or monocular depth prediction network outputs (e.g. Omnidata), or a composite.
 
 A room sized scene takes about 30 minutes to train and consistently outperforms related works, namely the standard L2 depth-loss, and loss formulations from Urban Radiance Fields [URF](https://urban-radiance-fields.github.io/) and Depth-Supervised Nerf [DS-NeRF](https://github.com/dunbar12138/DSNeRF).
@@ -68,6 +68,11 @@ And lastly to showcase the potential for real world usage: my living room from 1
 
 
 https://github.com/AlexSheldrick/mipnerf_pl/assets/59337109/fdf1684e-2dee-4fc5-98ce-997898c33b0a
+
+And additional outputs (ScanNet Room738, 18 images, camera parameters inferred from COLMAP)
+
+https://github.com/AlexSheldrick/mipnerf_pl/assets/59337109/6286f4b7-f218-4ae0-a5fd-a986a31367f1
+
 
 
 FAQ for dataset and installation to be added soon.
