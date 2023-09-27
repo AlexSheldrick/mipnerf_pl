@@ -1,11 +1,11 @@
 # Probabilistically Bounded Ray Densities
-This project is a fork of mipnerf_pl, in which the logic of [Mip-NeRF](https://jonbarron.info/mipnerf/) is extended by novel technqiues from [Mip-NeRF360]([https://jonbarron.info/mipnerf/](https://github.com/google-research/multinerf)), which are translated from Jax to PyTorch with Lightning.
+This project is a fork of mipnerf_pl. This fork extends the logic of [Mip-NeRF](https://jonbarron.info/mipnerf/) contributions for depth supervision and novel techniques from [Mip-NeRF360]([https://jonbarron.info/mipnerf/](https://github.com/google-research/multinerf)), which are ported from JAX to PyTorch with Lightning.
 
 The theoretical contributions of the work are compactly derived here [Method](https://github.com/AlexSheldrick/mipnerf_pl/blob/depth-mipnerf/media/Method_SWB.pdf).
 
 The following Mipnerf360 techniques have been ported to this fork:
 - Proposal network with 4 layers and 256 hidden units, replacing the coarse & fine stages of sampling.
-- Log linearly annealed learning rate (2e**3 to 2e**5) with 512 warmup steps.
+- Log linearly annealed learning rate (2e to 2e<sup>-5</sup>) with 512 warmup steps.
 - Images illumination of outputs are conditioned on per camera embeddings to account for change in per-image light conditions and motion blur.
 - Network accepts real world RGB-D sensor readings (e.g. partially complete), or monocular depth prediction network outputs (e.g. Omnidata), or a composite.
 
