@@ -1,4 +1,4 @@
-# Probabilistically Bounded Ray Densities
+# Probabilistically Bounded Ray Densities from Depthmaps
 
 This scene has been reconstructed from 18 images.
 
