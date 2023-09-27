@@ -26,6 +26,47 @@ And my living room from 10 images, without Camera Parameters or Depth sensors (c
 
 https://github.com/AlexSheldrick/mipnerf_pl/assets/59337109/fdf1684e-2dee-4fc5-98ce-997898c33b0a
 
+<table border="1">
+    <thead>
+        <tr>
+            <th colspan="1" style="text-align: left;">Compared Works</th>
+            <th colspan="4" style="text-align: right;">PSNR</th>
+        </tr>
+        <tr>
+            <th></th>
+            <td style="text-align: center;">3 Views</th>
+            <td style="text-align: center;">6 Views</th>
+            <td style="text-align: center;">100 Views</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="font-weight: bold;">Mip-NeRF</td>
+            <td style="text-align: center;">17.73</td>
+            <td style="text-align: center;">23.87</td>
+            <td style="text-align: center;">36.65</td>
+        </tr>
+        <tr>
+            <td>Rendered</td>
+            <td style="text-align: center;">20.32</td>
+            <td style="text-align: center;">25.90</td>
+            <td style="text-align: center;">35.09</td>
+        </tr>
+        <tr>
+            <td>URF</td>
+            <td style="text-align: center;">20.09</td>
+            <td style="text-align: center;">26.12</td>
+            <td style="text-align: center;">36.36</td>
+        </tr>
+        <tr>
+            <td style="font-weight: bold;">Ours</td>
+            <td style="text-align: center;"><strong>23.81</td>
+            <td style="text-align: center;"><strong>27.91</td>
+            <td style="text-align: center;"><strong>36.96</td>
+        </tr>
+    </tbody>
+</table>
+
 
 
 FAQ for dataset and installation to be added soon.
